@@ -1,93 +1,109 @@
 import type { NodeMetrics } from "../store/useDashboardStore";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function mapJsonToNodeMetrics(json: Record<string, any>): NodeMetrics {
+export function mapJsonToNodeMetrics(json: Record<string, unknown>): NodeMetrics {
   return {
-    activePeers: json.activePeers ?? 0,
-    uptimeSeconds: json.uptimeSeconds ?? 0,
-    healthStatus: json.healthStatus ?? 0,
+    activePeers: numberMetric(json, "activePeers"),
+    uptimeSeconds: numberMetric(json, "uptimeSeconds"),
+    healthStatus: numberMetric(json, "healthStatus"),
 
-    packetsReceived: json.packetsReceived ?? 0,
-    packetsForwarded: json.packetsForwarded ?? 0,
-    dummyPacketsDropped: json.dummyPacketsDropped ?? 0,
+    packetsReceived: numberMetric(json, "packetsReceived"),
+    packetsForwarded: numberMetric(json, "packetsForwarded"),
+    dummyPacketsDropped: numberMetric(json, "dummyPacketsDropped"),
 
-    workerQueueDepth: json.workerQueueDepth ?? 0,
-    mixQueueDepth: json.mixQueueDepth ?? 0,
-    egressQueueDepth: json.egressQueueDepth ?? 0,
-    ingestDropped: json.ingestDropped ?? 0,
-    ingestDroppedBackpressure: json.ingestDroppedBackpressure ?? 0,
+    workerQueueDepth: numberMetric(json, "workerQueueDepth"),
+    mixQueueDepth: numberMetric(json, "mixQueueDepth"),
+    egressQueueDepth: numberMetric(json, "egressQueueDepth"),
+    ingestDropped: numberMetric(json, "ingestDropped"),
+    ingestDroppedBackpressure: numberMetric(json, "ingestDroppedBackpressure"),
 
-    coverLoopGenerated: json.coverLoopGenerated ?? 0,
-    coverDropGenerated: json.coverDropGenerated ?? 0,
-    coverLoopDegraded:
-      typeof json.coverLoopDegraded === "boolean"
-        ? json.coverLoopDegraded
-        : (json.coverLoopDegraded ?? 0) >= 1,
-    coverDropDegraded:
-      typeof json.coverDropDegraded === "boolean"
-        ? json.coverDropDegraded
-        : (json.coverDropDegraded ?? 0) >= 1,
-    coverErrors: json.coverErrors ?? 0,
+    coverLoopGenerated: numberMetric(json, "coverLoopGenerated"),
+    coverDropGenerated: numberMetric(json, "coverDropGenerated"),
+    coverLoopDegraded: booleanMetric(json, "coverLoopDegraded"),
+    coverDropDegraded: booleanMetric(json, "coverDropDegraded"),
+    coverErrors: numberMetric(json, "coverErrors"),
 
-    cumulativeRevenueUsd: json.cumulativeRevenueUsd ?? 0,
-    cumulativeCostUsd: json.cumulativeCostUsd ?? 0,
-    ethPending: json.ethPending ?? 0,
-    profitableCount: json.profitableCount ?? 0,
-    unprofitableCount: json.unprofitableCount ?? 0,
+    cumulativeAuthorizedRevenueUsd: numberMetric(json, "cumulativeAuthorizedRevenueUsd"),
+    cumulativeCostUsd: numberMetric(json, "cumulativeCostUsd"),
+    cumulativeMaximumCostUsd: numberMetric(json, "cumulativeMaximumCostUsd"),
+    ethPending: numberMetric(json, "ethPending"),
+    profitableCount: numberMetric(json, "profitableCount"),
+    unprofitableCount: numberMetric(json, "unprofitableCount"),
 
-    exitPayloadsDispatched: json.exitPayloadsDispatched ?? 0,
-    exitReassemblerPending: json.exitReassemblerPending ?? 0,
-    exitEcho: json.exitEcho ?? 0,
-    exitHttp: json.exitHttp ?? 0,
-    exitRpc: json.exitRpc ?? 0,
-    exitBroadcast: json.exitBroadcast ?? 0,
-    exitEthereum: json.exitEthereum ?? 0,
-    exitTraffic: json.exitTraffic ?? 0,
-    ethTransactionsSubmitted: json.ethTransactionsSubmitted ?? 0,
-    egressForwarded: json.egressForwarded ?? 0,
-    egressExited: json.egressExited ?? 0,
+    exitPayloadsDispatched: numberMetric(json, "exitPayloadsDispatched"),
+    exitReassemblerPending: numberMetric(json, "exitReassemblerPending"),
+    exitEcho: numberMetric(json, "exitEcho"),
+    exitHttp: numberMetric(json, "exitHttp"),
+    exitRpc: numberMetric(json, "exitRpc"),
+    exitBroadcast: numberMetric(json, "exitBroadcast"),
+    exitEthereum: numberMetric(json, "exitEthereum"),
+    exitTraffic: numberMetric(json, "exitTraffic"),
+    ethTransactionsSubmitted: numberMetric(json, "ethTransactionsSubmitted"),
+    egressForwarded: numberMetric(json, "egressForwarded"),
+    egressExited: numberMetric(json, "egressExited"),
 
-    sphinxErrors: json.sphinxErrors ?? 0,
-    replayNew: json.replayNew ?? 0,
-    replayDuplicate: json.replayDuplicate ?? 0,
-    p2pRateLimitDenied: json.p2pRateLimitDenied ?? 0,
+    sphinxErrors: numberMetric(json, "sphinxErrors"),
+    replayNew: numberMetric(json, "replayNew"),
+    replayDuplicate: numberMetric(json, "replayDuplicate"),
+    p2pRateLimitDenied: numberMetric(json, "p2pRateLimitDenied"),
 
-    topologyLayer0: json.topologyLayer0 ?? 0,
-    topologyLayer1: json.topologyLayer1 ?? 0,
-    topologyLayer2: json.topologyLayer2 ?? 0,
+    topologyLayer0: numberMetric(json, "topologyLayer0"),
+    topologyLayer1: numberMetric(json, "topologyLayer1"),
+    topologyLayer2: numberMetric(json, "topologyLayer2"),
 
-    chainLastBlock: json.chainLastBlock ?? 0,
-    chainErrors: json.chainErrors ?? 0,
+    chainLastBlock: numberMetric(json, "chainLastBlock"),
+    chainErrors: numberMetric(json, "chainErrors"),
 
-    processMem: json.processMem ?? 0,
-    processVmem: json.processVmem ?? 0,
-    openFds: json.openFds ?? 0,
+    processMem: numberMetric(json, "processMem"),
+    processVmem: numberMetric(json, "processVmem"),
+    openFds: numberMetric(json, "openFds"),
 
-    buildVersion: json.buildVersion || "unknown",
-    buildRole: json.buildRole || "unknown",
+    buildVersion: stringMetric(json, "buildVersion"),
+    buildRole: stringMetric(json, "buildRole"),
 
-    ingressResponseBuffer: json.ingressResponseBuffer ?? 0,
+    ingressResponseBuffer: numberMetric(json, "ingressResponseBuffer"),
 
     fecSuccess:
-      json.fecSuccess ??
-      (json.fecEncodeSuccess ?? 0) + (json.fecDecodeSuccess ?? 0),
+      optionalNumberMetric(json, "fecSuccess") ??
+      numberMetric(json, "fecEncodeSuccess") + numberMetric(json, "fecDecodeSuccess"),
     fecError:
-      json.fecError ??
-      (json.fecEncodeError ?? 0) + (json.fecDecodeError ?? 0),
-    fecEncodeSuccess: json.fecEncodeSuccess ?? 0,
-    fecDecodeError: json.fecDecodeError ?? 0,
+      optionalNumberMetric(json, "fecError") ??
+      numberMetric(json, "fecEncodeError") + numberMetric(json, "fecDecodeError"),
+    fecEncodeSuccess: numberMetric(json, "fecEncodeSuccess"),
+    fecDecodeError: numberMetric(json, "fecDecodeError"),
 
-    oracleFetchStale: json.oracleFetchStale ?? 0,
+    oracleFetchStale: numberMetric(json, "oracleFetchStale"),
 
-    latencyP50: json.latencyP50 ?? 0,
-    latencyP95: json.latencyP95 ?? 0,
-    latencyP99: json.latencyP99 ?? 0,
+    latencyP50: numberMetric(json, "latencyP50"),
+    latencyP95: numberMetric(json, "latencyP95"),
+    latencyP99: numberMetric(json, "latencyP99"),
 
-    peersConnectedTotal: json.peersConnectedTotal ?? 0,
-    peersDisconnectedTotal: json.peersDisconnectedTotal ?? 0,
+    peersConnectedTotal: numberMetric(json, "peersConnectedTotal"),
+    peersDisconnectedTotal: numberMetric(json, "peersDisconnectedTotal"),
 
-    eventBusPacketProcessed: json.eventBusPacketProcessed ?? 0,
-    eventBusPayloadDecrypted: json.eventBusPayloadDecrypted ?? 0,
-    eventBusSendPacket: json.eventBusSendPacket ?? 0,
+    eventBusPacketProcessed: numberMetric(json, "eventBusPacketProcessed"),
+    eventBusPayloadDecrypted: numberMetric(json, "eventBusPayloadDecrypted"),
+    eventBusSendPacket: numberMetric(json, "eventBusSendPacket"),
   };
+}
+
+function optionalNumberMetric(
+  json: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = json[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function numberMetric(json: Record<string, unknown>, key: string): number {
+  return optionalNumberMetric(json, key) ?? 0;
+}
+
+function booleanMetric(json: Record<string, unknown>, key: string): boolean {
+  const value = json[key];
+  return typeof value === "boolean" ? value : numberMetric(json, key) >= 1;
+}
+
+function stringMetric(json: Record<string, unknown>, key: string): string {
+  const value = json[key];
+  return typeof value === "string" && value.length > 0 ? value : "unknown";
 }

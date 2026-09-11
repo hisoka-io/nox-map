@@ -32,8 +32,9 @@ export interface NodeMetrics {
   coverDropDegraded: boolean;
   coverErrors: number;
 
-  cumulativeRevenueUsd: number;
+  cumulativeAuthorizedRevenueUsd: number;
   cumulativeCostUsd: number;
+  cumulativeMaximumCostUsd: number;
   ethPending: number;
   profitableCount: number;
   unprofitableCount: number;
@@ -196,8 +197,9 @@ export const DEFAULT_METRICS: NodeMetrics = {
   coverLoopDegraded: false,
   coverDropDegraded: false,
   coverErrors: 0,
-  cumulativeRevenueUsd: 0,
+  cumulativeAuthorizedRevenueUsd: 0,
   cumulativeCostUsd: 0,
+  cumulativeMaximumCostUsd: 0,
   ethPending: 0,
   profitableCount: 0,
   unprofitableCount: 0,

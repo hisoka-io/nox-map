@@ -63,8 +63,6 @@ export function StatsPanel() {
       latencyP50: percentile(durations, 50),
       latencyP95: percentile(durations, 95),
       latencyP99: percentile(durations, 99),
-      revenue: sum((m) => m.cumulativeRevenueUsd),
-      cost: sum((m) => m.cumulativeCostUsd),
       coverLoop: sum((m) => m.coverLoopGenerated),
       coverDrop: sum((m) => m.coverDropGenerated),
       maxUptime: Math.max(...all.map((m) => m.uptimeSeconds)),

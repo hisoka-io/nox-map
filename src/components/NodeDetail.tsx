@@ -288,13 +288,14 @@ export function NodeDetail() {
               </Section>
 
               <Section title="ECONOMICS">
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 20 }}>
-                  <MiniStat value={fmtUsd(m.cumulativeRevenueUsd)} label="revenue" color="#22c55e" />
-                  <MiniStat value={fmtUsd(m.cumulativeCostUsd)} label="cost" color="#ef4444" />
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 20 }}>
+                  <MiniStat value={fmtUsd(m.cumulativeAuthorizedRevenueUsd)} label="authorized revenue" color="#22c55e" />
+                  <MiniStat value={fmtUsd(m.cumulativeCostUsd)} label="planned cost" color="#ef4444" />
+                  <MiniStat value={fmtUsd(m.cumulativeMaximumCostUsd)} label="max authorized" color="#f59e0b" />
                   <MiniStat
-                    value={fmtUsd(m.cumulativeRevenueUsd - m.cumulativeCostUsd)}
-                    label="P&L"
-                    color={m.cumulativeRevenueUsd >= m.cumulativeCostUsd ? "#22c55e" : "#ef4444"}
+                    value={fmtUsd(m.cumulativeAuthorizedRevenueUsd - m.cumulativeCostUsd)}
+                    label="planned margin"
+                    color={m.cumulativeAuthorizedRevenueUsd >= m.cumulativeCostUsd ? "#22c55e" : "#ef4444"}
                   />
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 20, marginTop: 12 }}>
