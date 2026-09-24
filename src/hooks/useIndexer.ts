@@ -1,5 +1,12 @@
 import { useEffect, useRef } from "react";
 import { useDashboardStore, type NodeInfo, type SseEvent } from "../store/useDashboardStore";
+import {
+  headlineFromMetrics,
+  parseGenesisMs,
+  parseNetworkTotals,
+  type HeadlineTotals,
+  type NetworkTotalsSnapshot,
+} from "../store/networkStats";
 import { mapJsonToNodeMetrics } from "./useMetrics";
 import { apiConfig } from "../config/api";
 import {
@@ -17,6 +24,30 @@ const INDEXER_WS_URL = `${INDEXER_BASE.replace(/^http/, "ws")}/v1/live`;
 const MOCK_METRICS_MS = 5_000;
 const MOCK_EVENTS_MS = 2_000;
 const REPUTATION_POLL_MS = 30_000;
+const STATE_POLL_MS = 30_000;
+
+/**
+ * Reads the optional network-wide fields of `/v1/state`. Older indexers omit
+ * them and every field comes back null, so callers fall back to per-node data.
+ */
+function readNetworkSnapshot(data: Record<string, unknown>) {
+  const parsed = parseNetworkTotals(data.network_totals);
+  let totals: NetworkTotalsSnapshot | null = null;
+  if (parsed) {
+    const baseline = new Map<string, HeadlineTotals>();
+    const metrics = (data.metrics ?? {}) as Record<string, Record<string, unknown>>;
+    for (const [address, json] of Object.entries(metrics)) {
+      baseline.set(address, headlineFromMetrics(mapJsonToNodeMetrics(json)));
+    }
+    totals = { totals: parsed, baseline };
+  }
+  const registry = data.registry_address;
+  return {
+    totals,
+    genesisMs: parseGenesisMs(data.network_genesis_ms, Date.now()),
+    registryAddress: typeof registry === "string" && registry.length > 0 ? registry : null,
+  };
+}
 
 export function useIndexer(): void {
   const setNodes = useDashboardStore((s) => s.setNodes);
@@ -26,6 +57,7 @@ export function useIndexer(): void {
   const setNodeMetricsReachable = useDashboardStore((s) => s.setNodeMetricsReachable);
   const setNodeSseConnected = useDashboardStore((s) => s.setNodeSseConnected);
   const setNodeReputation = useDashboardStore((s) => s.setNodeReputation);
+  const setNetworkSnapshot = useDashboardStore((s) => s.setNetworkSnapshot);
   const mockMode = useDashboardStore((s) => s.mockMode);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -95,6 +127,9 @@ export function useIndexer(): void {
 
         if (cancelled) return;
 
+        // Before setNodes: the registry address decides which nodes are listed.
+        setNetworkSnapshot(readNetworkSnapshot(data));
+
         const nodes: NodeInfo[] = data.nodes || [];
         setNodes(nodes);
         setClusterConnected(true);
@@ -145,6 +180,22 @@ export function useIndexer(): void {
         })));
       } catch {}
     }, REPUTATION_POLL_MS);
+
+    // Network totals are not pushed over the WebSocket; refresh them here.
+    const statePollId = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const resp = await fetch(INDEXER_REST_URL);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (cancelled) return;
+        const snapshot = readNetworkSnapshot(data);
+        const registryChanged =
+          snapshot.registryAddress !== useDashboardStore.getState().registryAddress;
+        setNetworkSnapshot(snapshot);
+        if (registryChanged && Array.isArray(data.nodes)) setNodes(data.nodes);
+      } catch {}
+    }, STATE_POLL_MS);
 
     function connectWs() {
       if (cancelled) return;
@@ -197,9 +248,10 @@ export function useIndexer(): void {
     return () => {
       cancelled = true;
       clearInterval(reputationPollId);
+      clearInterval(statePollId);
       if (wsRef.current) {
         wsRef.current.close();
       }
     };
-  }, [mockMode, setNodes, setClusterConnected, setNodeMetrics, addNodeEvent, setNodeMetricsReachable, setNodeSseConnected, setNodeReputation]);
+  }, [mockMode, setNodes, setClusterConnected, setNodeMetrics, addNodeEvent, setNodeMetricsReachable, setNodeSseConnected, setNodeReputation, setNetworkSnapshot]);
 }
