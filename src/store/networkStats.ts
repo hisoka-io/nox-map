@@ -1,4 +1,6 @@
 import type { NodeInfo, NodeMetrics, NodeReputation } from "./useDashboardStore";
+// Explicit .ts extensions let node's test runner load this module directly.
+import { mapJsonToNodeMetrics } from "../hooks/useMetrics.ts";
 
 /**
  * Lifetime counters shown in the headline cards and the bottom ticker.
@@ -115,6 +117,54 @@ export function parseNetworkTotals(raw: unknown): Partial<HeadlineTotals> | null
   return Object.keys(totals).length > 0 ? totals : null;
 }
 
+/** The network-wide fields of `/v1/state`; every field is null on older indexers. */
+export interface NetworkSnapshot {
+  totals: NetworkTotalsSnapshot | null;
+  genesisMs: number | null;
+  /** The registry the indexer follows. */
+  registryAddress: string | null;
+  /** `.indexer.phase`: "starting", "syncing", "retrying" or "live". */
+  indexerPhase: string | null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Reads the optional network-wide fields of a `/v1/state` response. The
+ * totals baseline comes from the same response's `metrics`, so live growth is
+ * measured from the point the totals describe.
+ */
+export function readNetworkSnapshot(
+  data: Record<string, unknown>,
+  nowMs: number,
+): NetworkSnapshot {
+  const parsed = parseNetworkTotals(data.network_totals);
+  let totals: NetworkTotalsSnapshot | null = null;
+  if (parsed) {
+    const baseline = new Map<string, HeadlineTotals>();
+    const metrics = (data.metrics ?? {}) as Record<string, Record<string, unknown>>;
+    for (const [address, json] of Object.entries(metrics)) {
+      baseline.set(address, headlineFromMetrics(mapJsonToNodeMetrics(json)));
+    }
+    totals = { totals: parsed, baseline };
+  }
+
+  // The indexer reports the registry it follows inside its sync status.
+  const indexer =
+    data.indexer && typeof data.indexer === "object"
+      ? (data.indexer as Record<string, unknown>)
+      : {};
+
+  return {
+    totals,
+    genesisMs: parseGenesisMs(data.network_genesis_ms, nowMs),
+    registryAddress: readString(data.registry_address) ?? readString(indexer.registry_address),
+    indexerPhase: readString(indexer.phase),
+  };
+}
+
 /**
  * Parses `/v1/state.network_genesis_ms` (tolerating unix seconds). Returns
  * null when absent, invalid or in the future.
@@ -127,6 +177,24 @@ export function parseGenesisMs(raw: unknown, nowMs: number): number | null {
 
 export function networkUptimeSeconds(genesisMs: number, nowMs: number): number {
   return Math.max(0, Math.floor((nowMs - genesisMs) / 1000));
+}
+
+/**
+ * Network uptime, counted from the indexer's genesis but never below the
+ * longest-running node. Genesis is estimated from uptime-check history, which
+ * starts after the first node did, while a node's banked uptime is a lower
+ * bound on the network's age. Without a genesis the longest-running node
+ * stands in, and there is no start date to show.
+ */
+export function networkUptime(
+  genesisMs: number | null,
+  maxNodeUptimeSeconds: number,
+  nowMs: number,
+): { seconds: number; sinceMs: number | null } {
+  const nodeSeconds = Math.max(0, Math.floor(maxNodeUptimeSeconds));
+  if (genesisMs == null) return { seconds: nodeSeconds, sinceMs: null };
+  const seconds = Math.max(networkUptimeSeconds(genesisMs, nowMs), nodeSeconds);
+  return { seconds, sinceMs: nowMs - seconds * 1000 };
 }
 
 export function formatSince(genesisMs: number): string {

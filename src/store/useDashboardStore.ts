@@ -1,5 +1,10 @@
 import { create } from "zustand";
-import { isRetiredNode, type NetworkTotalsSnapshot } from "./networkStats";
+// Explicit .ts extension so node's test runner can load the store.
+import {
+  isRetiredNode,
+  type NetworkSnapshot,
+  type NetworkTotalsSnapshot,
+} from "./networkStats.ts";
 
 export interface NodeInfo {
   id: string;
@@ -174,13 +179,10 @@ export interface DashboardState {
   networkTotals: NetworkTotalsSnapshot | null;
   networkGenesisMs: number | null;
   registryAddress: string | null;
+  indexerPhase: string | null;
 
   setNodes: (nodes: NodeInfo[]) => void;
-  setNetworkSnapshot: (snapshot: {
-    totals: NetworkTotalsSnapshot | null;
-    genesisMs: number | null;
-    registryAddress: string | null;
-  }) => void;
+  setNetworkSnapshot: (snapshot: NetworkSnapshot) => void;
   setClusterConnected: (c: boolean) => void;
   setMockMode: (m: boolean) => void;
   setSelectedNodeId: (id: string | null) => void;
@@ -266,6 +268,11 @@ function pickListed<V>(map: Map<string, V>, listed: Set<string>): Map<string, V>
   return next.size === map.size ? map : next;
 }
 
+// Plain code-unit order, as the indexer sorts `/v1/state.nodes`.
+function byAddress(a: NodeInfo, b: NodeInfo): number {
+  return a.address < b.address ? -1 : a.address > b.address ? 1 : 0;
+}
+
 function isCoverHealthy(metrics: Map<string, NodeMetrics>): boolean {
   for (const m of metrics.values()) {
     if (m.coverLoopDegraded || m.coverDropDegraded) return false;
@@ -292,12 +299,24 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   networkTotals: null,
   networkGenesisMs: null,
   registryAddress: null,
+  indexerPhase: null,
 
   // Deregistered nodes are dropped, and per-node state for any node that
   // leaves the list is cleared so it no longer feeds sums or averages.
   setNodes: (incoming) =>
     set((state) => {
-      const nodes = incoming.filter((n) => !isRetiredNode(n, state.registryAddress));
+      const nodes = incoming
+        .filter((n) => !isRetiredNode(n, state.registryAddress))
+        // Markers and arcs take their city from the list position, and the
+        // indexer's REST and WebSocket lists arrive in different orders.
+        .sort(byAddress);
+
+      // During its first sync of a new registry the indexer reports no nodes.
+      // Keep the current list until it is live instead of blanking the map.
+      if (nodes.length === 0 && state.nodes.length > 0 && state.indexerPhase !== "live") {
+        return {};
+      }
+
       const listed = new Set(nodes.map((n) => n.address));
       const nodeMetrics = pickListed(state.nodeMetrics, listed);
       return {
@@ -312,8 +331,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
             : null,
       };
     }),
-  setNetworkSnapshot: ({ totals, genesisMs, registryAddress }) =>
-    set({ networkTotals: totals, networkGenesisMs: genesisMs, registryAddress }),
+  setNetworkSnapshot: ({ totals, genesisMs, registryAddress, indexerPhase }) =>
+    set({ networkTotals: totals, networkGenesisMs: genesisMs, registryAddress, indexerPhase }),
   setGlobeStyle: (style) => set({ globeStyle: style }),
   setClusterConnected: (c) => set({ clusterConnected: c }),
   setMockMode: (m) => set({ mockMode: m }),
