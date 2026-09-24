@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useDashboardStore } from "../store/useDashboardStore";
+import { computeHeadline, isOnlineNode } from "../store/networkStats";
 import { ARC_COLORS } from "./constants";
 
 interface TickerCategory {
@@ -17,16 +18,15 @@ const ARC_LEGEND = [
 
 export function BottomTicker() {
   const nodeMetrics = useDashboardStore((s) => s.nodeMetrics);
+  const networkTotals = useDashboardStore((s) => s.networkTotals);
   const onlineCount = useDashboardStore(
-    (s) => s.nodes.filter((n) => !n.status || n.status === "online").length,
+    (s) => s.nodes.filter(isOnlineNode).length,
   );
 
   const categories = useMemo((): TickerCategory[] => {
     const all = Array.from(nodeMetrics.values());
-    if (all.length === 0) return [];
+    if (all.length === 0 && !networkTotals) return [];
 
-    const sum = (fn: (m: (typeof all)[0]) => number) =>
-      all.reduce((a, m) => a + fn(m), 0);
     const fmt = (n: number) =>
       n >= 1e6
         ? `${(n / 1e6).toFixed(1)}M`
@@ -34,21 +34,19 @@ export function BottomTicker() {
           ? `${(n / 1e3).toFixed(1)}K`
           : n.toLocaleString();
 
-    const totalRecv = sum((m) => m.packetsReceived);
-    const totalFwd = sum((m) => m.packetsForwarded);
-    const totalPeers = sum((m) => m.activePeers);
-    const web3Txs = sum((m) => m.exitEthereum);
-    const exitOps = sum((m) => m.exitHttp + m.exitRpc + m.exitEcho + m.exitBroadcast);
+    const headline = computeHeadline(nodeMetrics, networkTotals);
+    // Peers is a live gauge, so it always comes from the current nodes.
+    const totalPeers = all.reduce((a, m) => a + m.activePeers, 0);
 
     return [
-      { label: "RECEIVED", value: fmt(totalRecv), color: "#38bdf8" },
-      { label: "FORWARDED", value: fmt(totalFwd), color: "#00ff88" },
+      { label: "RECEIVED", value: fmt(headline.packetsReceived), color: "#38bdf8" },
+      { label: "FORWARDED", value: fmt(headline.packetsForwarded), color: "#00ff88" },
       { label: "PEERS", value: fmt(totalPeers), color: "#f59e0b" },
-      { label: "EXIT OPS", value: fmt(exitOps), color: "#a78bfa" },
-      { label: "WEB3 TXs", value: fmt(web3Txs), color: "#22c55e" },
+      { label: "EXIT OPS", value: fmt(headline.exitOps), color: "#a78bfa" },
+      { label: "WEB3 TXs", value: fmt(headline.exitEthereum), color: "#22c55e" },
       { label: "NODES", value: String(onlineCount), color: "#22c55e" },
     ];
-  }, [nodeMetrics, onlineCount]);
+  }, [nodeMetrics, networkTotals, onlineCount]);
 
   if (categories.length === 0) return null;
 

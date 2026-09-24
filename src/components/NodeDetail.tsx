@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useDashboardStore, DEFAULT_METRICS } from "../store/useDashboardStore";
-import { ROLE_LABELS, LAYER_LABELS } from "./constants";
+import { isFrozenNode } from "../store/networkStats";
+import { FROZEN_COLOR, ROLE_LABELS, LAYER_LABELS } from "./constants";
 
 function reputationColor(score: number): string {
   if (score >= 80) return "#00ff88";
@@ -139,6 +140,9 @@ export function NodeDetail() {
                 <Tag color={lColor}>{LAYER_LABELS[node.layer]}</Tag>
                 <Tag color="rgba(255,255,255,0.4)">{ROLE_LABELS[node.role]}</Tag>
                 <Tag color={status.color}>{status.label}</Tag>
+                {isFrozenNode(node) && (
+                  <Tag color={FROZEN_COLOR}>Frozen</Tag>
+                )}
               </div>
             </div>
             <button
