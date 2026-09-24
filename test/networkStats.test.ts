@@ -9,9 +9,11 @@ import {
   isFrozenNode,
   isOnlineNode,
   isRetiredNode,
+  networkUptime,
   networkUptimeSeconds,
   parseGenesisMs,
   parseNetworkTotals,
+  readNetworkSnapshot,
 } from "../src/store/networkStats.ts";
 import type { NodeInfo, NodeMetrics } from "../src/store/useDashboardStore.ts";
 
@@ -134,6 +136,67 @@ test("network uptime counts from genesis", () => {
   assert.equal(networkUptimeSeconds(genesis, genesis + 90_500), 90);
   assert.equal(networkUptimeSeconds(genesis, genesis - 1), 0);
   assert.equal(formatSince(genesis), "since Apr 2026");
+});
+
+test("network uptime never drops below the longest-running node", () => {
+  // Production on 2026-09-24: the indexer's genesis estimate (first uptime
+  // check) is 2026-04-10, but fleet nodes have banked 170d 14h of uptime.
+  const now = Date.UTC(2026, 8, 24, 18, 11);
+  const genesis = 1_775_782_807_018;
+  const maxNodeUptime = 14_742_660.4;
+
+  const uptime = networkUptime(genesis, maxNodeUptime, now);
+  assert.equal(uptime.seconds, 14_742_660);
+  assert.equal(uptime.sinceMs, now - 14_742_660_000);
+  assert.equal(formatSince(uptime.sinceMs!), "since Apr 2026");
+
+  // Genesis wins once it is older than every node's uptime.
+  assert.deepEqual(networkUptime(genesis, 60, genesis + 3_600_000), {
+    seconds: 3_600,
+    sinceMs: genesis,
+  });
+  // Without a genesis the longest-running node stands in, with no start date.
+  assert.deepEqual(networkUptime(null, 90.7, now), { seconds: 90, sinceMs: null });
+});
+
+test("readNetworkSnapshot reads the indexer's sync status and totals baseline", () => {
+  const now = Date.UTC(2026, 8, 24);
+  const snapshot = readNetworkSnapshot(
+    {
+      metrics: { "0xa": { packetsReceived: 10, exitEcho: 1, exitHttp: 2 } },
+      network_totals: { packetsReceived: 500, exitEcho: 4 },
+      network_genesis_ms: Date.UTC(2026, 3, 7),
+      indexer: { phase: "live", verified: true, registry_address: "0xnew" },
+    },
+    now,
+  );
+
+  assert.equal(snapshot.registryAddress, "0xnew");
+  assert.equal(snapshot.indexerPhase, "live");
+  assert.equal(snapshot.genesisMs, Date.UTC(2026, 3, 7));
+  assert.deepEqual(snapshot.totals?.totals, { packetsReceived: 500, exitOps: 4 });
+  assert.equal(snapshot.totals?.baseline.get("0xa")?.packetsReceived, 10);
+  assert.equal(snapshot.totals?.baseline.get("0xa")?.exitOps, 3);
+
+  // A top-level registry address takes precedence over the sync status.
+  assert.equal(
+    readNetworkSnapshot({ registry_address: "0xtop", indexer: { registry_address: "0xnew" } }, now)
+      .registryAddress,
+    "0xtop",
+  );
+
+  // Today's indexer sends none of these fields.
+  assert.deepEqual(readNetworkSnapshot({ nodes: [], metrics: {} }, now), {
+    totals: null,
+    genesisMs: null,
+    registryAddress: null,
+    indexerPhase: null,
+  });
+  assert.equal(
+    readNetworkSnapshot({ indexer: { registry_address: "", phase: "starting" } }, now)
+      .registryAddress,
+    null,
+  );
 });
 
 test("node classification", () => {

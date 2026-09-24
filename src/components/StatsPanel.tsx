@@ -6,7 +6,7 @@ import {
   formatSince,
   isFrozenNode,
   isOnlineNode,
-  networkUptimeSeconds,
+  networkUptime,
 } from "../store/networkStats";
 import { FROZEN_COLOR } from "./constants";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
@@ -105,13 +105,8 @@ export function StatsPanel() {
     nodeReputation,
   );
 
-  // Network uptime counts from the indexer's genesis (first node ever seen)
-  // when it reports one; otherwise the longest-running node stands in.
-  const uptimeSeconds =
-    networkGenesisMs != null
-      ? networkUptimeSeconds(networkGenesisMs, Date.now())
-      : stats.maxUptime;
-  const uptimeDetail = networkGenesisMs != null ? formatSince(networkGenesisMs) : undefined;
+  const uptime = networkUptime(networkGenesisMs, stats.maxUptime, Date.now());
+  const uptimeDetail = uptime.sinceMs != null ? formatSince(uptime.sinceMs) : undefined;
 
   const fmtMs = (n: number) => (n < 1 ? "<1" : String(Math.round(n)));
   const fmt = (n: number) =>
@@ -234,7 +229,7 @@ export function StatsPanel() {
           detail={`${fmt(stats.exitEthereum)} web3 TXs`}
         />
         <MetricCard
-          value={formatUptime(uptimeSeconds)}
+          value={formatUptime(uptime.seconds)}
           label="network uptime"
           color="#00ff88"
           detail={uptimeDetail}
