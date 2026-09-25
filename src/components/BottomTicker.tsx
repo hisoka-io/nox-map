@@ -22,6 +22,9 @@ export function BottomTicker() {
   const onlineCount = useDashboardStore(
     (s) => s.nodes.filter(isOnlineNode).length,
   );
+  const registeredCount = useDashboardStore(
+    (s) => s.nodes.filter((n) => n.status !== "deregistered").length,
+  );
 
   const categories = useMemo((): TickerCategory[] => {
     const all = Array.from(nodeMetrics.values());
@@ -44,9 +47,9 @@ export function BottomTicker() {
       { label: "PEERS", value: fmt(totalPeers), color: "#f59e0b" },
       { label: "EXIT OPS", value: fmt(headline.exitOps), color: "#a78bfa" },
       { label: "WEB3 TXs", value: fmt(headline.exitEthereum), color: "#22c55e" },
-      { label: "NODES", value: String(onlineCount), color: "#22c55e" },
+      { label: "NODES ONLINE", value: `${onlineCount}/${registeredCount}`, color: "#22c55e" },
     ];
-  }, [nodeMetrics, networkTotals, onlineCount]);
+  }, [nodeMetrics, networkTotals, onlineCount, registeredCount]);
 
   if (categories.length === 0) return null;
 
