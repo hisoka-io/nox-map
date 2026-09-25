@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "preview:production": "vite preview --mode production",
     "type-check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
     "clean": "rm -rf dist node_modules/.vite"
   },
   "dependencies": {

@@ -18,6 +18,7 @@ Mock mode (no backend): open `http://localhost:3001?mock=true`
 - `pnpm run dev` — dev server
 - `pnpm run build` — production build
 - `pnpm run type-check` — typecheck
+- `pnpm test` — unit tests (Node 22.6+)
 
 ## License
 

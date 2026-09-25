@@ -3,14 +3,18 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { useDashboardStore } from "../store/useDashboardStore";
+import { isFrozenNode } from "../store/networkStats";
 import {
   GLOBE_RADIUS,
   NODE_POSITIONS,
+  FROZEN_COLOR,
   LAYER_COLORS,
   LAYER_LABELS,
   ROLE_LABELS,
   latLonToVec3,
 } from "./constants";
+
+const FROZEN_MARKER_COLOR = new THREE.Color(FROZEN_COLOR);
 
 const prefersReducedMotion =
   typeof window !== "undefined" &&
@@ -25,10 +29,12 @@ export function NodeMarkers() {
     () =>
       nodes.map((node, i) => {
         const pos = NODE_POSITIONS[i % NODE_POSITIONS.length];
+        const frozen = isFrozenNode(node);
         return {
           node,
+          frozen,
           vec: latLonToVec3(pos[0], pos[1], GLOBE_RADIUS * 1.01),
-          color: LAYER_COLORS[node.layer] ?? LAYER_COLORS[0],
+          color: frozen ? FROZEN_MARKER_COLOR : (LAYER_COLORS[node.layer] ?? LAYER_COLORS[0]),
         };
       }),
     [nodes],
@@ -36,7 +42,7 @@ export function NodeMarkers() {
 
   return (
     <group>
-      {nodeData.map(({ node, vec, color }) => {
+      {nodeData.map(({ node, frozen, vec, color }) => {
         const metrics = nodeMetrics.get(node.address);
         return (
           <NodePoint
@@ -47,7 +53,8 @@ export function NodeMarkers() {
             nodeAddress={node.address}
             layer={node.layer}
             role={node.role}
-            isActive={metrics ? metrics.healthStatus >= 1 : false}
+            frozen={frozen}
+            isActive={!frozen && metrics ? metrics.healthStatus >= 1 : false}
             packetsRecv={metrics?.packetsReceived ?? 0}
             setSelectedNodeId={setSelectedNodeId}
           />
@@ -64,6 +71,7 @@ interface NodePointProps {
   nodeAddress: string;
   layer: number;
   role: number;
+  frozen: boolean;
   isActive: boolean;
   packetsRecv: number;
   setSelectedNodeId: (id: string) => void;
@@ -76,6 +84,7 @@ function NodePoint({
   nodeAddress,
   layer,
   role,
+  frozen,
   isActive,
   packetsRecv,
   setSelectedNodeId,
@@ -172,6 +181,7 @@ function NodePoint({
           </div>
           <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", fontWeight: 400, marginTop: 2 }}>
             {LAYER_LABELS[layer]} &middot; {ROLE_LABELS[role]}
+            {frozen && <> &middot; FROZEN</>}
           </div>
           <div style={{ fontSize: "12px", fontFamily: '"Space Grotesk", sans-serif', fontWeight: 700, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>
             {packetsRecv.toLocaleString()} pkts
