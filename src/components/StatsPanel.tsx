@@ -1,6 +1,19 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { useDashboardStore } from "../store/useDashboardStore";
+import {
+  averageReputation,
+  computeHeadline,
+  formatSince,
+  isFrozenNode,
+  isOnlineNode,
+  networkUptime,
+} from "../store/networkStats";
+import { FROZEN_COLOR } from "./constants";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+
+type NodeState = "online" | "frozen" | "offline";
+
+const STATE_RANK: Record<NodeState, number> = { online: 0, frozen: 1, offline: 2 };
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -30,24 +43,38 @@ export function StatsPanel() {
   const selectedNodeId = useDashboardStore((s) => s.selectedNodeId);
 
   const nodeReputation = useDashboardStore((s) => s.nodeReputation);
+  const networkTotals = useDashboardStore((s) => s.networkTotals);
+  const networkGenesisMs = useDashboardStore((s) => s.networkGenesisMs);
 
+  // Every registered node is listed, so the count above the list matches it;
+  // offline nodes (no metrics yet) and frozen nodes sort below online ones.
   const topNodes = useMemo(() => {
     return nodes
-      .map((n) => ({
-        ...n,
-        metrics: nodeMetrics.get(n.address),
-        reputation: nodeReputation.get(n.address),
-      }))
-      .filter((n) => n.metrics)
-      .sort((a, b) => (b.reputation?.score ?? 0) - (a.reputation?.score ?? 0));
+      .map((n) => {
+        const state: NodeState = isFrozenNode(n)
+          ? "frozen"
+          : isOnlineNode(n)
+            ? "online"
+            : "offline";
+        return {
+          ...n,
+          state,
+          metrics: nodeMetrics.get(n.address),
+          reputation: nodeReputation.get(n.address),
+        };
+      })
+      .sort(
+        (a, b) =>
+          STATE_RANK[a.state] - STATE_RANK[b.state] ||
+          (b.reputation?.score ?? 0) - (a.reputation?.score ?? 0),
+      );
   }, [nodes, nodeMetrics, nodeReputation]);
 
   const stats = useMemo(() => {
     const all = Array.from(nodeMetrics.values());
-    if (all.length === 0) return null;
+    if (all.length === 0 && !networkTotals) return null;
 
-    const sum = (fn: (m: (typeof all)[0]) => number) =>
-      all.reduce((a, m) => a + fn(m), 0);
+    const headline = computeHeadline(nodeMetrics, networkTotals);
 
     const durations: number[] = [];
     for (const evts of nodeEvents.values()) {
@@ -63,22 +90,23 @@ export function StatsPanel() {
       latencyP50: percentile(durations, 50),
       latencyP95: percentile(durations, 95),
       latencyP99: percentile(durations, 99),
-      coverLoop: sum((m) => m.coverLoopGenerated),
-      coverDrop: sum((m) => m.coverDropGenerated),
-      maxUptime: Math.max(...all.map((m) => m.uptimeSeconds)),
-      exitTotal: sum((m) => m.exitPayloadsDispatched),
-      exitTraffic: sum((m) => m.exitTraffic),
-      exitEthereum: sum((m) => m.exitEthereum),
+      coverLoop: headline.coverLoopGenerated,
+      coverDrop: headline.coverDropGenerated,
+      maxUptime: all.length > 0 ? Math.max(...all.map((m) => m.uptimeSeconds)) : 0,
+      exitOps: headline.exitOps,
+      exitEthereum: headline.exitEthereum,
     };
-  }, [nodeMetrics, nodeEvents]);
+  }, [nodeMetrics, nodeEvents, networkTotals]);
 
   if (nodes.length === 0 || !stats) return null;
 
-  const repScores = Array.from(nodeReputation.values()).map((r) => r.score);
-  const avgReputation =
-    repScores.length > 0
-      ? Math.round(repScores.reduce((a, b) => a + b, 0) / repScores.length)
-      : null;
+  const { average: avgReputation, count: reputationCount } = averageReputation(
+    nodes,
+    nodeReputation,
+  );
+
+  const uptime = networkUptime(networkGenesisMs, stats.maxUptime, Date.now());
+  const uptimeDetail = uptime.sinceMs != null ? formatSince(uptime.sinceMs) : undefined;
 
   const fmtMs = (n: number) => (n < 1 ? "<1" : String(Math.round(n)));
   const fmt = (n: number) =>
@@ -151,6 +179,7 @@ export function StatsPanel() {
               layer={n.layer}
               score={n.reputation?.score ?? null}
               packets={n.metrics?.packetsReceived ?? 0}
+              state={n.state}
               selected={n.address === selectedNodeId}
               onClick={() => handleNodeSelect(n.address)}
               onKeyDown={(e) => handleNodeKeyDown(e, n.address)}
@@ -191,18 +220,19 @@ export function StatsPanel() {
                   ? "#f59e0b"
                   : "#ef4444"
           }
-          detail={`avg across ${nodes.length} nodes`}
+          detail={`avg across ${reputationCount} nodes`}
         />
         <MetricCard
-          value={fmt(stats.exitTotal - stats.exitTraffic)}
+          value={fmt(stats.exitOps)}
           label="exit operations"
           color="#a78bfa"
           detail={`${fmt(stats.exitEthereum)} web3 TXs`}
         />
         <MetricCard
-          value={formatUptime(stats.maxUptime)}
+          value={formatUptime(uptime.seconds)}
           label="network uptime"
           color="#00ff88"
+          detail={uptimeDetail}
         />
       </div>
     </aside>
@@ -263,6 +293,7 @@ function NodeRow({
   layer,
   score,
   packets,
+  state,
   selected,
   onClick,
   onKeyDown,
@@ -271,13 +302,20 @@ function NodeRow({
   layer: number;
   score: number | null;
   packets: number;
+  state: NodeState;
   selected: boolean;
   onClick: () => void;
   onKeyDown: (e: ReactKeyboardEvent) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const dotColor =
-    layer === 0 ? "#00ff88" : layer === 1 ? "#38bdf8" : "#f97316";
+    state === "frozen"
+      ? FROZEN_COLOR
+      : layer === 0
+        ? "#00ff88"
+        : layer === 1
+          ? "#38bdf8"
+          : "#f97316";
   const repPct = score != null ? score : 0;
   const repColor = score != null ? scoreColor(score) : "rgba(255,255,255,0.2)";
   const isActive = hovered || selected;
@@ -300,7 +338,8 @@ function NodeRow({
             ? "rgba(255,255,255,0.03)"
             : "transparent",
         borderLeft: selected ? "2px solid #00ff88" : "2px solid transparent",
-        transition: "background 0.15s, border-color 0.15s",
+        opacity: state === "offline" && !isActive ? 0.55 : 1,
+        transition: "background 0.15s, border-color 0.15s, opacity 0.15s",
       }}
     >
       <div
@@ -334,6 +373,21 @@ function NodeRow({
             }}
           />
           {id}
+          {state !== "online" && (
+            <span
+              style={{
+                fontSize: "10px",
+                letterSpacing: "0.1em",
+                fontWeight: 500,
+                color: state === "frozen" ? FROZEN_COLOR : "rgba(255,255,255,0.4)",
+                border: `1px solid ${state === "frozen" ? `${FROZEN_COLOR}55` : "rgba(255,255,255,0.15)"}`,
+                borderRadius: 3,
+                padding: "1px 5px",
+              }}
+            >
+              {state === "frozen" ? "FROZEN" : "OFFLINE"}
+            </span>
+          )}
         </span>
         <span
           style={{

@@ -1,4 +1,10 @@
 import { create } from "zustand";
+// Explicit .ts extension so node's test runner can load the store.
+import {
+  isRetiredNode,
+  type NetworkSnapshot,
+  type NetworkTotalsSnapshot,
+} from "./networkStats.ts";
 
 export interface NodeInfo {
   id: string;
@@ -9,6 +15,8 @@ export interface NodeInfo {
   ingress_port: number;
   p2p_addr: string;
   status?: string; // "online" | "offline" | "deregistered"
+  frozen?: boolean; // registered but barred from routing (NoxRegistry v2)
+  registry_address?: string; // registry the indexer saw this node on
 }
 
 export interface NodeMetrics {
@@ -168,7 +176,13 @@ export interface DashboardState {
   nodeReputation: Map<string, NodeReputation>;
   clusterCoverHealthy: boolean;
 
+  networkTotals: NetworkTotalsSnapshot | null;
+  networkGenesisMs: number | null;
+  registryAddress: string | null;
+  indexerPhase: string | null;
+
   setNodes: (nodes: NodeInfo[]) => void;
+  setNetworkSnapshot: (snapshot: NetworkSnapshot) => void;
   setClusterConnected: (c: boolean) => void;
   setMockMode: (m: boolean) => void;
   setSelectedNodeId: (id: string | null) => void;
@@ -246,6 +260,26 @@ export const DEFAULT_METRICS: NodeMetrics = {
 
 const MAX_EVENTS = 200;
 
+function pickListed<V>(map: Map<string, V>, listed: Set<string>): Map<string, V> {
+  const next = new Map<string, V>();
+  for (const [address, value] of map) {
+    if (listed.has(address)) next.set(address, value);
+  }
+  return next.size === map.size ? map : next;
+}
+
+// Plain code-unit order, as the indexer sorts `/v1/state.nodes`.
+function byAddress(a: NodeInfo, b: NodeInfo): number {
+  return a.address < b.address ? -1 : a.address > b.address ? 1 : 0;
+}
+
+function isCoverHealthy(metrics: Map<string, NodeMetrics>): boolean {
+  for (const m of metrics.values()) {
+    if (m.coverLoopDegraded || m.coverDropDegraded) return false;
+  }
+  return true;
+}
+
 export const useDashboardStore = create<DashboardState>((set) => ({
   nodes: [],
   clusterConnected: false,
@@ -262,7 +296,43 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   nodeReputation: new Map(),
   clusterCoverHealthy: true,
 
-  setNodes: (nodes) => set({ nodes }),
+  networkTotals: null,
+  networkGenesisMs: null,
+  registryAddress: null,
+  indexerPhase: null,
+
+  // Deregistered nodes are dropped, and per-node state for any node that
+  // leaves the list is cleared so it no longer feeds sums or averages.
+  setNodes: (incoming) =>
+    set((state) => {
+      const nodes = incoming
+        .filter((n) => !isRetiredNode(n, state.registryAddress))
+        // Markers and arcs take their city from the list position, and the
+        // indexer's REST and WebSocket lists arrive in different orders.
+        .sort(byAddress);
+
+      // During its first sync of a new registry the indexer reports no nodes.
+      // Keep the current list until it is live instead of blanking the map.
+      if (nodes.length === 0 && state.nodes.length > 0 && state.indexerPhase !== "live") {
+        return {};
+      }
+
+      const listed = new Set(nodes.map((n) => n.address));
+      const nodeMetrics = pickListed(state.nodeMetrics, listed);
+      return {
+        nodes,
+        nodeMetrics,
+        nodeMetricsReachable: pickListed(state.nodeMetricsReachable, listed),
+        nodeSseConnected: pickListed(state.nodeSseConnected, listed),
+        clusterCoverHealthy: isCoverHealthy(nodeMetrics),
+        selectedNodeId:
+          state.selectedNodeId && listed.has(state.selectedNodeId)
+            ? state.selectedNodeId
+            : null,
+      };
+    }),
+  setNetworkSnapshot: ({ totals, genesisMs, registryAddress, indexerPhase }) =>
+    set({ networkTotals: totals, networkGenesisMs: genesisMs, registryAddress, indexerPhase }),
   setGlobeStyle: (style) => set({ globeStyle: style }),
   setClusterConnected: (c) => set({ clusterConnected: c }),
   setMockMode: (m) => set({ mockMode: m }),
@@ -276,24 +346,17 @@ export const useDashboardStore = create<DashboardState>((set) => ({
 
   setNodeMetrics: (nodeId, m) =>
     set((state) => {
-      state.nodeMetrics.set(nodeId, m);
-      const newMetrics = new Map(state.nodeMetrics);
+      // Metrics for a node outside the list (e.g. a deregistered node the
+      // indexer still scrapes) would leak into the headline sums.
+      if (!state.nodes.some((n) => n.address === nodeId)) return {};
 
-      state.nodeMetricsReachable.set(nodeId, true);
-      const newReachable = new Map(state.nodeMetricsReachable);
-
-      let clusterCoverHealthy = true;
-      for (const nm of newMetrics.values()) {
-        if (nm.coverLoopDegraded || nm.coverDropDegraded) {
-          clusterCoverHealthy = false;
-          break;
-        }
-      }
+      const newMetrics = new Map(state.nodeMetrics).set(nodeId, m);
+      const newReachable = new Map(state.nodeMetricsReachable).set(nodeId, true);
 
       return {
         nodeMetrics: newMetrics,
         nodeMetricsReachable: newReachable,
-        clusterCoverHealthy,
+        clusterCoverHealthy: isCoverHealthy(newMetrics),
       };
     }),
 
@@ -332,13 +395,13 @@ export const useDashboardStore = create<DashboardState>((set) => ({
 
   setNodeMetricsReachable: (nodeId, r) =>
     set((state) => {
-      state.nodeMetricsReachable.set(nodeId, r);
-      return { nodeMetricsReachable: new Map(state.nodeMetricsReachable) };
+      if (!state.nodes.some((n) => n.address === nodeId)) return {};
+      return { nodeMetricsReachable: new Map(state.nodeMetricsReachable).set(nodeId, r) };
     }),
 
   setNodeSseConnected: (nodeId, c) =>
     set((state) => {
-      state.nodeSseConnected.set(nodeId, c);
-      return { nodeSseConnected: new Map(state.nodeSseConnected) };
+      if (!state.nodes.some((n) => n.address === nodeId)) return {};
+      return { nodeSseConnected: new Map(state.nodeSseConnected).set(nodeId, c) };
     }),
 }));

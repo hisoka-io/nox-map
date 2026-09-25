@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useDashboardStore, type NodeInfo, type SseEvent } from "../store/useDashboardStore";
+import { readNetworkSnapshot } from "../store/networkStats";
 import { mapJsonToNodeMetrics } from "./useMetrics";
 import { apiConfig } from "../config/api";
 import {
@@ -17,6 +18,7 @@ const INDEXER_WS_URL = `${INDEXER_BASE.replace(/^http/, "ws")}/v1/live`;
 const MOCK_METRICS_MS = 5_000;
 const MOCK_EVENTS_MS = 2_000;
 const REPUTATION_POLL_MS = 30_000;
+const STATE_POLL_MS = 30_000;
 
 export function useIndexer(): void {
   const setNodes = useDashboardStore((s) => s.setNodes);
@@ -26,6 +28,7 @@ export function useIndexer(): void {
   const setNodeMetricsReachable = useDashboardStore((s) => s.setNodeMetricsReachable);
   const setNodeSseConnected = useDashboardStore((s) => s.setNodeSseConnected);
   const setNodeReputation = useDashboardStore((s) => s.setNodeReputation);
+  const setNetworkSnapshot = useDashboardStore((s) => s.setNetworkSnapshot);
   const mockMode = useDashboardStore((s) => s.mockMode);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -95,6 +98,10 @@ export function useIndexer(): void {
 
         if (cancelled) return;
 
+        // Before setNodes: the registry address and sync phase decide which
+        // nodes are listed.
+        setNetworkSnapshot(readNetworkSnapshot(data, Date.now()));
+
         const nodes: NodeInfo[] = data.nodes || [];
         setNodes(nodes);
         setClusterConnected(true);
@@ -145,6 +152,25 @@ export function useIndexer(): void {
         })));
       } catch {}
     }, REPUTATION_POLL_MS);
+
+    // Network totals are not pushed over the WebSocket; refresh them here.
+    const statePollId = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const resp = await fetch(INDEXER_REST_URL);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (cancelled) return;
+        const snapshot = readNetworkSnapshot(data, Date.now());
+        const previous = useDashboardStore.getState();
+        // A new registry or a finished first sync changes the member list.
+        const membershipChanged =
+          snapshot.registryAddress !== previous.registryAddress ||
+          snapshot.indexerPhase !== previous.indexerPhase;
+        setNetworkSnapshot(snapshot);
+        if (membershipChanged && Array.isArray(data.nodes)) setNodes(data.nodes);
+      } catch {}
+    }, STATE_POLL_MS);
 
     function connectWs() {
       if (cancelled) return;
@@ -197,9 +223,10 @@ export function useIndexer(): void {
     return () => {
       cancelled = true;
       clearInterval(reputationPollId);
+      clearInterval(statePollId);
       if (wsRef.current) {
         wsRef.current.close();
       }
     };
-  }, [mockMode, setNodes, setClusterConnected, setNodeMetrics, addNodeEvent, setNodeMetricsReachable, setNodeSseConnected, setNodeReputation]);
+  }, [mockMode, setNodes, setClusterConnected, setNodeMetrics, addNodeEvent, setNodeMetricsReachable, setNodeSseConnected, setNodeReputation, setNetworkSnapshot]);
 }

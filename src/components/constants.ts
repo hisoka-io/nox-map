@@ -8,6 +8,9 @@ export const LAYER_COLORS: Record<number, THREE.Color> = {
   2: new THREE.Color("#f97316"), // Exit
 };
 
+// Registered but barred from routing by the registry.
+export const FROZEN_COLOR = "#7dd3fc";
+
 export const LAYER_LABELS: Record<number, string> = {
   0: "ENTRY",
   1: "MIX",
