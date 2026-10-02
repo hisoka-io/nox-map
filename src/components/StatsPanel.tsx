@@ -1,43 +1,26 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { useDashboardStore } from "../store/useDashboardStore";
 import {
+  averagePeers,
   averageReputation,
   computeHeadline,
+  formatDuration,
   formatSince,
   isFrozenNode,
   isOnlineNode,
   networkUptime,
 } from "../store/networkStats";
-import { FROZEN_COLOR } from "./constants";
+import { useNarrowViewport } from "../hooks/useNarrowViewport";
+import { FROZEN_COLOR, LAYER_HEX } from "./constants";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 type NodeState = "online" | "frozen" | "offline";
 
 const STATE_RANK: Record<NodeState, number> = { online: 0, frozen: 1, offline: 2 };
 
-function percentile(sorted: number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  const idx = Math.ceil((p / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, idx)];
-}
-
-function formatUptime(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h >= 24) {
-    const d = Math.floor(h / 24);
-    const rh = h % 24;
-    return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
-  }
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
-}
-
 export function StatsPanel() {
   const nodes = useDashboardStore((s) => s.nodes);
   const nodeMetrics = useDashboardStore((s) => s.nodeMetrics);
-  const nodeEvents = useDashboardStore((s) => s.nodeEvents);
   const clusterCoverHealthy = useDashboardStore((s) => s.clusterCoverHealthy);
   const setSelectedNodeId = useDashboardStore((s) => s.setSelectedNodeId);
   const selectedNodeId = useDashboardStore((s) => s.selectedNodeId);
@@ -45,6 +28,8 @@ export function StatsPanel() {
   const nodeReputation = useDashboardStore((s) => s.nodeReputation);
   const networkTotals = useDashboardStore((s) => s.networkTotals);
   const networkGenesisMs = useDashboardStore((s) => s.networkGenesisMs);
+  const narrow = useNarrowViewport();
+  const [expanded, setExpanded] = useState(false);
 
   // Every registered node is listed, so the count above the list matches it;
   // offline nodes (no metrics yet) and frozen nodes sort below online ones.
@@ -76,27 +61,16 @@ export function StatsPanel() {
 
     const headline = computeHeadline(nodeMetrics, networkTotals);
 
-    const durations: number[] = [];
-    for (const evts of nodeEvents.values()) {
-      for (const e of evts) {
-        if (e.kind === "packet_processed") {
-          durations.push(e.duration_ms);
-        }
-      }
-    }
-    durations.sort((a, b) => a - b);
-
     return {
-      latencyP50: percentile(durations, 50),
-      latencyP95: percentile(durations, 95),
-      latencyP99: percentile(durations, 99),
+      avgPeers: averagePeers(all),
+      reportingNodes: all.length,
       coverLoop: headline.coverLoopGenerated,
       coverDrop: headline.coverDropGenerated,
       maxUptime: all.length > 0 ? Math.max(...all.map((m) => m.uptimeSeconds)) : 0,
       exitOps: headline.exitOps,
       exitEthereum: headline.exitEthereum,
     };
-  }, [nodeMetrics, nodeEvents, networkTotals]);
+  }, [nodeMetrics, networkTotals]);
 
   if (nodes.length === 0 || !stats) return null;
 
@@ -108,7 +82,6 @@ export function StatsPanel() {
   const uptime = networkUptime(networkGenesisMs, stats.maxUptime, Date.now());
   const uptimeDetail = uptime.sinceMs != null ? formatSince(uptime.sinceMs) : undefined;
 
-  const fmtMs = (n: number) => (n < 1 ? "<1" : String(Math.round(n)));
   const fmt = (n: number) =>
     n >= 1e6
       ? `${(n / 1e6).toFixed(1)}M`
@@ -130,16 +103,58 @@ export function StatsPanel() {
   return (
     <aside
       aria-label="Network statistics"
-      style={{
-        position: "absolute",
-        top: 100,
-        right: 20,
-        zIndex: 20,
-        width: 340,
-        pointerEvents: "auto",
-      }}
+      style={
+        narrow
+          ? {
+              position: "absolute",
+              top: 60,
+              left: 12,
+              right: 12,
+              zIndex: 20,
+              maxHeight: "calc(100% - 270px)",
+              overflowY: "auto",
+              padding: expanded ? "10px 12px" : "0 12px",
+              background: "rgba(5,10,5,0.92)",
+              border: "1px solid rgba(0,255,136,0.08)",
+              borderRadius: 6,
+              pointerEvents: "auto",
+            }
+          : {
+              position: "absolute",
+              top: 100,
+              right: 20,
+              zIndex: 20,
+              width: 340,
+              pointerEvents: "auto",
+            }
+      }
     >
-      <div style={{ marginBottom: 32 }}>
+      {narrow && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          style={{
+            width: "100%",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            background: "none",
+            border: "none",
+            color: "rgba(255,255,255,0.55)",
+            fontFamily: "inherit",
+            fontSize: "12px",
+            letterSpacing: "0.2em",
+            padding: "10px 0",
+            cursor: "pointer",
+          }}
+        >
+          <span>NETWORK · {nodes.length} NODES</span>
+          <span aria-hidden="true">{expanded ? "▴" : "▾"}</span>
+        </button>
+      )}
+      {(!narrow || expanded) && (
+      <>
+      <div style={{ marginBottom: narrow ? 16 : 32 }}>
         <div
           style={{
             display: "flex",
@@ -197,10 +212,10 @@ export function StatsPanel() {
         }}
       >
         <MetricCard
-          value={fmtMs(stats.latencyP50)}
-          unit="ms"
-          label="p50 latency"
-          color={stats.latencyP50 < 100 ? "#00ff88" : "#f59e0b"}
+          value={stats.avgPeers != null ? String(stats.avgPeers) : "—"}
+          label="peers per node"
+          color="rgba(255,255,255,0.75)"
+          detail={`avg across ${stats.reportingNodes} nodes`}
         />
         <MetricCard
           value={clusterCoverHealthy ? "OK" : "LOW"}
@@ -229,12 +244,14 @@ export function StatsPanel() {
           detail={`${fmt(stats.exitEthereum)} web3 TXs`}
         />
         <MetricCard
-          value={formatUptime(uptime.seconds)}
+          value={formatDuration(uptime.seconds)}
           label="network uptime"
           color="#00ff88"
           detail={uptimeDetail}
         />
       </div>
+      </>
+      )}
     </aside>
   );
 }
@@ -308,14 +325,7 @@ function NodeRow({
   onKeyDown: (e: ReactKeyboardEvent) => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const dotColor =
-    state === "frozen"
-      ? FROZEN_COLOR
-      : layer === 0
-        ? "#00ff88"
-        : layer === 1
-          ? "#38bdf8"
-          : "#f97316";
+  const dotColor = state === "frozen" ? FROZEN_COLOR : (LAYER_HEX[layer] ?? LAYER_HEX[0]);
   const repPct = score != null ? score : 0;
   const repColor = score != null ? scoreColor(score) : "rgba(255,255,255,0.2)";
   const isActive = hovered || selected;

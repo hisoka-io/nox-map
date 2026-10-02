@@ -5,40 +5,41 @@ import {
   type NetworkSnapshot,
   type NetworkTotalsSnapshot,
 } from "./networkStats.ts";
+import { routingLayer } from "./layers.ts";
 
 export interface NodeInfo {
   id: string;
   address: string;
-  role: number; // 1=Relay, 2=Exit, 3=Full
-  layer: number; // 0=Entry, 1=Mix, 2=Exit
+  role: number; // on-chain role: 1=Relay, 2=Exit, 3=Full
+  /**
+   * Mix layer, 0=Entry, 1=Mix, 2=Exit. The store derives it from the on-chain
+   * role and address (see routingLayer) rather than trusting the reported value.
+   */
+  layer: number;
   admin_port: number;
   ingress_port: number;
   p2p_addr: string;
   status?: string; // "online" | "offline" | "deregistered"
   frozen?: boolean; // registered but barred from routing (NoxRegistry v2)
-  registry_address?: string; // registry the indexer saw this node on
+  latitude?: number | null; // GeoIP of the node's public IP; 0,0 when unknown
+  longitude?: number | null;
 }
 
 export interface NodeMetrics {
   activePeers: number;
+  /** Lifetime online time banked by the indexer across restarts. */
   uptimeSeconds: number;
+  /** Unix seconds when the node process started; 0 when unknown. */
+  nodeStartTime: number;
   healthStatus: number; // 0=unhealthy, 1=degraded, 2=healthy
 
   packetsReceived: number;
   packetsForwarded: number;
-  dummyPacketsDropped: number;
-
-  workerQueueDepth: number;
-  mixQueueDepth: number;
-  egressQueueDepth: number;
-  ingestDropped: number;
-  ingestDroppedBackpressure: number;
 
   coverLoopGenerated: number;
   coverDropGenerated: number;
   coverLoopDegraded: boolean;
   coverDropDegraded: boolean;
-  coverErrors: number;
 
   cumulativeAuthorizedRevenueUsd: number;
   cumulativeCostUsd: number;
@@ -48,55 +49,15 @@ export interface NodeMetrics {
   unprofitableCount: number;
 
   exitPayloadsDispatched: number;
-  exitReassemblerPending: number;
   exitEcho: number;
   exitHttp: number;
   exitRpc: number;
   exitBroadcast: number;
   exitEthereum: number;
-  exitTraffic: number;
   ethTransactionsSubmitted: number;
-  egressForwarded: number;
-  egressExited: number;
 
-  sphinxErrors: number;
-  replayNew: number;
-  replayDuplicate: number;
-  p2pRateLimitDenied: number;
-
-  topologyLayer0: number;
-  topologyLayer1: number;
-  topologyLayer2: number;
-
-  chainLastBlock: number;
-  chainErrors: number;
-
-  processMem: number;
-  processVmem: number;
-  openFds: number;
-
+  /** Empty when the node does not report it. */
   buildVersion: string;
-  buildRole: string;
-
-  ingressResponseBuffer: number;
-
-  fecSuccess: number;
-  fecError: number;
-  fecEncodeSuccess: number;
-  fecDecodeError: number;
-
-  oracleFetchStale: number;
-
-  latencyP50: number;
-  latencyP95: number;
-  latencyP99: number;
-
-  peersConnectedTotal: number;
-  peersDisconnectedTotal: number;
-
-  eventBusPacketProcessed: number;
-  eventBusPayloadDecrypted: number;
-  eventBusSendPacket: number;
 }
 
 export type NodeStartedEvent = {
@@ -130,20 +91,30 @@ export type TopologyRemoveEvent = {
   node_id?: string;
   timestamp?: number;
 };
-export type PacketProcessedEvent = {
-  kind: "packet_processed";
-  duration_ms: number;
-  node_id?: string;
-  timestamp?: number;
-};
-
 export type SseEvent =
   | NodeStartedEvent
   | PeerConnectedEvent
   | PeerDisconnectedEvent
   | TopologyAddEvent
-  | TopologyRemoveEvent
-  | PacketProcessedEvent;
+  | TopologyRemoveEvent;
+
+/** Event kinds the map lists. Per-packet events are ignored. */
+const LISTED_EVENT_KINDS = new Set<string>([
+  "node_started",
+  "peer_connected",
+  "peer_disconnected",
+  "topology_add",
+  "topology_remove",
+]);
+
+/** Traffic a node reported between two metric updates. */
+export interface ActivityEntry {
+  address: string;
+  relayed: number;
+  exits: number;
+  /** Unix seconds. */
+  timestamp: number;
+}
 
 export interface NodeReputation {
   address: string;
@@ -151,11 +122,6 @@ export interface NodeReputation {
   streak: number;
   totalChecks: number;
   passedChecks: number;
-}
-
-export interface TopologyNode {
-  address: string;
-  role: number;
 }
 
 export type GlobeStyle = "night" | "day";
@@ -169,10 +135,8 @@ export interface DashboardState {
 
   nodeMetrics: Map<string, NodeMetrics>;
   nodeEvents: Map<string, SseEvent[]>;
-  nodeMetricsReachable: Map<string, boolean>;
-  nodeSseConnected: Map<string, boolean>;
+  activity: ActivityEntry[];
 
-  topology: Map<string, TopologyNode>;
   nodeReputation: Map<string, NodeReputation>;
   clusterCoverHealthy: boolean;
 
@@ -180,6 +144,8 @@ export interface DashboardState {
   networkGenesisMs: number | null;
   registryAddress: string | null;
   indexerPhase: string | null;
+  chainId: number | null;
+  registryVerified: boolean | null;
 
   setNodes: (nodes: NodeInfo[]) => void;
   setNetworkSnapshot: (snapshot: NetworkSnapshot) => void;
@@ -187,30 +153,22 @@ export interface DashboardState {
   setMockMode: (m: boolean) => void;
   setSelectedNodeId: (id: string | null) => void;
   setNodeMetrics: (nodeId: string, m: NodeMetrics) => void;
-  addNodeEvent: (nodeId: string, e: SseEvent) => void;
+  addNodeEvent: (nodeId: string, e: unknown) => void;
   setNodeReputation: (rankings: NodeReputation[]) => void;
   setGlobeStyle: (style: GlobeStyle) => void;
-  setNodeMetricsReachable: (nodeId: string, r: boolean) => void;
-  setNodeSseConnected: (nodeId: string, c: boolean) => void;
 }
 
 export const DEFAULT_METRICS: NodeMetrics = {
   activePeers: 0,
   uptimeSeconds: 0,
+  nodeStartTime: 0,
   healthStatus: 0,
   packetsReceived: 0,
   packetsForwarded: 0,
-  dummyPacketsDropped: 0,
-  workerQueueDepth: 0,
-  mixQueueDepth: 0,
-  egressQueueDepth: 0,
-  ingestDropped: 0,
-  ingestDroppedBackpressure: 0,
   coverLoopGenerated: 0,
   coverDropGenerated: 0,
   coverLoopDegraded: false,
   coverDropDegraded: false,
-  coverErrors: 0,
   cumulativeAuthorizedRevenueUsd: 0,
   cumulativeCostUsd: 0,
   cumulativeMaximumCostUsd: 0,
@@ -218,47 +176,17 @@ export const DEFAULT_METRICS: NodeMetrics = {
   profitableCount: 0,
   unprofitableCount: 0,
   exitPayloadsDispatched: 0,
-  exitReassemblerPending: 0,
   exitEcho: 0,
   exitHttp: 0,
   exitRpc: 0,
   exitBroadcast: 0,
   exitEthereum: 0,
-  exitTraffic: 0,
   ethTransactionsSubmitted: 0,
-  egressForwarded: 0,
-  egressExited: 0,
-  sphinxErrors: 0,
-  replayNew: 0,
-  replayDuplicate: 0,
-  p2pRateLimitDenied: 0,
-  topologyLayer0: 0,
-  topologyLayer1: 0,
-  topologyLayer2: 0,
-  chainLastBlock: 0,
-  chainErrors: 0,
-  processMem: 0,
-  processVmem: 0,
-  openFds: 0,
-  buildVersion: "unknown",
-  buildRole: "unknown",
-  ingressResponseBuffer: 0,
-  fecSuccess: 0,
-  fecError: 0,
-  fecEncodeSuccess: 0,
-  fecDecodeError: 0,
-  oracleFetchStale: 0,
-  latencyP50: 0,
-  latencyP95: 0,
-  latencyP99: 0,
-  peersConnectedTotal: 0,
-  peersDisconnectedTotal: 0,
-  eventBusPacketProcessed: 0,
-  eventBusPayloadDecrypted: 0,
-  eventBusSendPacket: 0,
+  buildVersion: "",
 };
 
-const MAX_EVENTS = 200;
+const MAX_EVENTS = 50;
+const MAX_ACTIVITY = 40;
 
 function pickListed<V>(map: Map<string, V>, listed: Set<string>): Map<string, V> {
   const next = new Map<string, V>();
@@ -280,6 +208,20 @@ function isCoverHealthy(metrics: Map<string, NodeMetrics>): boolean {
   return true;
 }
 
+// A jump this large between two updates is a counter rebase (e.g. the
+// indexer re-banking lifetime totals), not traffic.
+const MAX_ACTIVITY_STEP = 50_000;
+
+function growth(after: number, before: number): number {
+  const d = after - before;
+  return d > 0 && d <= MAX_ACTIVITY_STEP ? Math.round(d) : 0;
+}
+
+function normalizeNode(n: NodeInfo): NodeInfo {
+  const address = String(n.address ?? "").toLowerCase();
+  return { ...n, address, layer: routingLayer(Number(n.role), address) };
+}
+
 export const useDashboardStore = create<DashboardState>((set) => ({
   nodes: [],
   clusterConnected: false,
@@ -289,10 +231,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
 
   nodeMetrics: new Map(),
   nodeEvents: new Map(),
-  nodeMetricsReachable: new Map(),
-  nodeSseConnected: new Map(),
+  activity: [],
 
-  topology: new Map(),
   nodeReputation: new Map(),
   clusterCoverHealthy: true,
 
@@ -300,15 +240,18 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   networkGenesisMs: null,
   registryAddress: null,
   indexerPhase: null,
+  chainId: null,
+  registryVerified: null,
 
   // Deregistered nodes are dropped, and per-node state for any node that
   // leaves the list is cleared so it no longer feeds sums or averages.
   setNodes: (incoming) =>
     set((state) => {
       const nodes = incoming
-        .filter((n) => !isRetiredNode(n, state.registryAddress))
-        // Markers and arcs take their city from the list position, and the
-        // indexer's REST and WebSocket lists arrive in different orders.
+        .filter((n) => n && typeof n.address === "string" && !isRetiredNode(n))
+        .map(normalizeNode)
+        // Positions are assigned in list order, and the indexer's REST and
+        // WebSocket lists arrive in different orders.
         .sort(byAddress);
 
       // During its first sync of a new registry the indexer reports no nodes.
@@ -322,8 +265,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
       return {
         nodes,
         nodeMetrics,
-        nodeMetricsReachable: pickListed(state.nodeMetricsReachable, listed),
-        nodeSseConnected: pickListed(state.nodeSseConnected, listed),
+        nodeEvents: pickListed(state.nodeEvents, listed),
+        activity: state.activity.filter((a) => listed.has(a.address)),
         clusterCoverHealthy: isCoverHealthy(nodeMetrics),
         selectedNodeId:
           state.selectedNodeId && listed.has(state.selectedNodeId)
@@ -331,8 +274,15 @@ export const useDashboardStore = create<DashboardState>((set) => ({
             : null,
       };
     }),
-  setNetworkSnapshot: ({ totals, genesisMs, registryAddress, indexerPhase }) =>
-    set({ networkTotals: totals, networkGenesisMs: genesisMs, registryAddress, indexerPhase }),
+  setNetworkSnapshot: ({ totals, genesisMs, registryAddress, indexerPhase, chainId, verified }) =>
+    set({
+      networkTotals: totals,
+      networkGenesisMs: genesisMs,
+      registryAddress,
+      indexerPhase,
+      chainId,
+      registryVerified: verified,
+    }),
   setGlobeStyle: (style) => set({ globeStyle: style }),
   setClusterConnected: (c) => set({ clusterConnected: c }),
   setMockMode: (m) => set({ mockMode: m }),
@@ -340,68 +290,61 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   setNodeReputation: (rankings) =>
     set(() => {
       const map = new Map<string, NodeReputation>();
-      for (const r of rankings) map.set(r.address, r);
+      for (const r of rankings) map.set(r.address.toLowerCase(), r);
       return { nodeReputation: map };
     }),
 
   setNodeMetrics: (nodeId, m) =>
     set((state) => {
+      const address = nodeId.toLowerCase();
       // Metrics for a node outside the list (e.g. a deregistered node the
       // indexer still scrapes) would leak into the headline sums.
-      if (!state.nodes.some((n) => n.address === nodeId)) return {};
+      if (!state.nodes.some((n) => n.address === address)) return {};
 
-      const newMetrics = new Map(state.nodeMetrics).set(nodeId, m);
-      const newReachable = new Map(state.nodeMetricsReachable).set(nodeId, true);
-
-      return {
+      const newMetrics = new Map(state.nodeMetrics).set(address, m);
+      const update: Partial<DashboardState> = {
         nodeMetrics: newMetrics,
-        nodeMetricsReachable: newReachable,
         clusterCoverHealthy: isCoverHealthy(newMetrics),
       };
-    }),
 
-  addNodeEvent: (nodeId, e) =>
-    set((state) => {
-      if (!("timestamp" in e) || typeof e.timestamp !== "number") {
-        (e as { timestamp?: number }).timestamp = Math.floor(Date.now() / 1000);
-      }
-      const existing = state.nodeEvents.get(nodeId) ?? [];
-
-      // Dedup: skip if a matching event already exists in recent window
-      const isDuplicate = existing.slice(0, 20).some(
-        (prev) =>
-          prev.kind === e.kind && JSON.stringify(prev) === JSON.stringify(e),
-      );
-      if (isDuplicate) return {};
-
-      const newEvents = [e, ...existing].slice(0, MAX_EVENTS);
-      state.nodeEvents.set(nodeId, newEvents);
-      const newNodeEvents = new Map(state.nodeEvents);
-
-      let newTopology = state.topology;
-      if (e.kind === "topology_add") {
-        state.topology.set(e.address, { address: e.address, role: e.role });
-        newTopology = new Map(state.topology);
-      } else if (e.kind === "topology_remove") {
-        state.topology.delete(e.address);
-        newTopology = new Map(state.topology);
+      const before = state.nodeMetrics.get(address);
+      if (before) {
+        const relayed = growth(m.packetsForwarded, before.packetsForwarded);
+        const exits = growth(m.exitPayloadsDispatched, before.exitPayloadsDispatched);
+        if (relayed > 0 || exits > 0) {
+          const entry: ActivityEntry = {
+            address,
+            relayed,
+            exits,
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          update.activity = [entry, ...state.activity].slice(0, MAX_ACTIVITY);
+        }
       }
 
-      return {
-        nodeEvents: newNodeEvents,
-        topology: newTopology,
-      };
+      return update;
     }),
 
-  setNodeMetricsReachable: (nodeId, r) =>
+  addNodeEvent: (nodeId, raw) =>
     set((state) => {
-      if (!state.nodes.some((n) => n.address === nodeId)) return {};
-      return { nodeMetricsReachable: new Map(state.nodeMetricsReachable).set(nodeId, r) };
-    }),
+      if (!raw || typeof raw !== "object") return {};
+      const kind = (raw as { kind?: unknown }).kind;
+      if (typeof kind !== "string" || !LISTED_EVENT_KINDS.has(kind)) return {};
 
-  setNodeSseConnected: (nodeId, c) =>
-    set((state) => {
-      if (!state.nodes.some((n) => n.address === nodeId)) return {};
-      return { nodeSseConnected: new Map(state.nodeSseConnected).set(nodeId, c) };
+      const address = nodeId.toLowerCase();
+      if (!state.nodes.some((n) => n.address === address)) return {};
+
+      const e = { ...(raw as SseEvent) };
+      if (typeof e.timestamp !== "number") e.timestamp = Math.floor(Date.now() / 1000);
+
+      const existing = state.nodeEvents.get(address) ?? [];
+      // Skip an event already among the most recent ones (REST backlog and
+      // WebSocket can overlap).
+      const key = JSON.stringify(e);
+      if (existing.slice(0, 20).some((prev) => JSON.stringify(prev) === key)) return {};
+
+      const nodeEvents = new Map(state.nodeEvents);
+      nodeEvents.set(address, [e, ...existing].slice(0, MAX_EVENTS));
+      return { nodeEvents };
     }),
 }));

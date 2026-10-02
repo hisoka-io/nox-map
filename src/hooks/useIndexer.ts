@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useDashboardStore, type NodeInfo, type SseEvent } from "../store/useDashboardStore";
+import { useDashboardStore, type NodeInfo, type NodeReputation } from "../store/useDashboardStore";
 import { readNetworkSnapshot } from "../store/networkStats";
 import { mapJsonToNodeMetrics } from "./useMetrics";
 import { apiConfig } from "../config/api";
@@ -25,8 +25,6 @@ export function useIndexer(): void {
   const setClusterConnected = useDashboardStore((s) => s.setClusterConnected);
   const setNodeMetrics = useDashboardStore((s) => s.setNodeMetrics);
   const addNodeEvent = useDashboardStore((s) => s.addNodeEvent);
-  const setNodeMetricsReachable = useDashboardStore((s) => s.setNodeMetricsReachable);
-  const setNodeSseConnected = useDashboardStore((s) => s.setNodeSseConnected);
   const setNodeReputation = useDashboardStore((s) => s.setNodeReputation);
   const setNetworkSnapshot = useDashboardStore((s) => s.setNetworkSnapshot);
   const mockMode = useDashboardStore((s) => s.mockMode);
@@ -46,13 +44,11 @@ export function useIndexer(): void {
         timestamp: Math.floor(Date.now() / 1000),
         node_id: n.address,
       });
-      setNodeSseConnected(n.address, true);
     }
 
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       setNodeMetrics(n.address, generateMockNodeMetrics(n.id, i));
-      setNodeMetricsReachable(n.address, true);
     }
 
     setNodeReputation(generateMockReputation(nodes));
@@ -61,13 +57,12 @@ export function useIndexer(): void {
       for (let i = 0; i < nodes.length; i++) {
         const n = nodes[i];
         setNodeMetrics(n.address, generateMockNodeMetrics(n.id, i));
-        setNodeMetricsReachable(n.address, true);
       }
     }, MOCK_METRICS_MS);
 
     const eventsId = setInterval(() => {
       for (const n of nodes) {
-        const count = Math.floor(Math.random() * 4) + 1;
+        const count = Math.random() < 0.1 ? 1 : 0;
         for (const e of generateMockEvents(count, n.address)) {
           addNodeEvent(n.address, e);
         }
@@ -83,7 +78,7 @@ export function useIndexer(): void {
       clearInterval(eventsId);
       clearInterval(reputationId);
     };
-  }, [mockMode, setNodes, setClusterConnected, setNodeMetrics, addNodeEvent, setNodeMetricsReachable, setNodeSseConnected, setNodeReputation]);
+  }, [mockMode, setNodes, setClusterConnected, setNodeMetrics, addNodeEvent, setNodeReputation]);
 
   useEffect(() => {
     if (mockMode) return;
@@ -102,29 +97,21 @@ export function useIndexer(): void {
         // nodes are listed.
         setNetworkSnapshot(readNetworkSnapshot(data, Date.now()));
 
-        const nodes: NodeInfo[] = data.nodes || [];
+        const nodes: NodeInfo[] = Array.isArray(data.nodes) ? data.nodes : [];
         setNodes(nodes);
         setClusterConnected(true);
 
         for (const [address, metricsData] of Object.entries(data.metrics ?? {})) {
           setNodeMetrics(address, mapJsonToNodeMetrics(metricsData as Record<string, unknown>));
-          setNodeMetricsReachable(address, true);
-          setNodeSseConnected(address, true);
         }
 
         if (Array.isArray(data.reputation)) {
-          setNodeReputation(data.reputation.map((r: Record<string, unknown>) => ({
-            address: r.address as string,
-            score: (r.score as number) ?? 100,
-            streak: (r.streak as number) ?? 0,
-            totalChecks: (r.total_checks as number) ?? 0,
-            passedChecks: (r.passed_checks as number) ?? 0,
-          })));
+          setNodeReputation(parseReputation(data.reputation));
         }
 
-        for (const e of data.recent_events ?? []) {
-          const addr = e.node_address ?? e.node_id;
-          if (addr) addNodeEvent(addr, e as SseEvent);
+        for (const e of Array.isArray(data.recent_events) ? data.recent_events : []) {
+          const addr = e?.node_address ?? e?.node_id;
+          if (typeof addr === "string") addNodeEvent(addr, e);
         }
       } catch (e) {
         if (!cancelled) setClusterConnected(false);
@@ -143,13 +130,7 @@ export function useIndexer(): void {
         if (!resp.ok) return;
         const data = await resp.json();
         if (cancelled || !Array.isArray(data.ranking)) return;
-        setNodeReputation(data.ranking.map((r: Record<string, unknown>) => ({
-          address: r.address as string,
-          score: (r.score as number) ?? 100,
-          streak: (r.streak as number) ?? 0,
-          totalChecks: (r.total_checks as number) ?? 0,
-          passedChecks: (r.passed_checks as number) ?? 0,
-        })));
+        setNodeReputation(parseReputation(data.ranking));
       } catch {}
     }, REPUTATION_POLL_MS);
 
@@ -188,20 +169,16 @@ export function useIndexer(): void {
 
           if (parsed.type === "METRICS") {
             const address = parsed.node_address;
-            setNodeMetrics(address, mapJsonToNodeMetrics(parsed.payload));
-            setNodeMetricsReachable(address, true);
+            if (typeof address === "string" && parsed.payload && typeof parsed.payload === "object") {
+              setNodeMetrics(address, mapJsonToNodeMetrics(parsed.payload));
+            }
           } else if (parsed.type === "EVENT") {
             const ev = parsed.payload;
-            const address = ev.node_address ?? ev.node_id ?? "unknown";
-            addNodeEvent(address, ev as SseEvent);
+            const address = ev?.node_address ?? ev?.node_id;
+            if (typeof address === "string") addNodeEvent(address, ev);
           } else if (parsed.type === "CLUSTER") {
-            setNodes(parsed.payload.nodes || []);
+            if (Array.isArray(parsed.payload?.nodes)) setNodes(parsed.payload.nodes);
             setClusterConnected(true);
-          } else if (parsed.type === "NODE_STATE") {
-            const address = parsed.node_id;
-            if (address) {
-              setNodeSseConnected(address, true);
-            }
           }
         } catch {}
       };
@@ -228,5 +205,26 @@ export function useIndexer(): void {
         wsRef.current.close();
       }
     };
-  }, [mockMode, setNodes, setClusterConnected, setNodeMetrics, addNodeEvent, setNodeMetricsReachable, setNodeSseConnected, setNodeReputation, setNetworkSnapshot]);
+  }, [mockMode, setNodes, setClusterConnected, setNodeMetrics, addNodeEvent, setNodeReputation, setNetworkSnapshot]);
+}
+
+function finiteOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function parseReputation(rows: unknown[]): NodeReputation[] {
+  const out: NodeReputation[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const r = row as Record<string, unknown>;
+    if (typeof r.address !== "string") continue;
+    out.push({
+      address: r.address,
+      score: finiteOr(r.score, 100),
+      streak: finiteOr(r.streak, 0),
+      totalChecks: finiteOr(r.total_checks, 0),
+      passedChecks: finiteOr(r.passed_checks, 0),
+    });
+  }
+  return out;
 }

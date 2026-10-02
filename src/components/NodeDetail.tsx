@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useDashboardStore, DEFAULT_METRICS } from "../store/useDashboardStore";
-import { isFrozenNode } from "../store/networkStats";
-import { FROZEN_COLOR, ROLE_LABELS, LAYER_LABELS } from "./constants";
+import { formatDuration, isFrozenNode, processUptimeSeconds } from "../store/networkStats";
+import { useNarrowViewport } from "../hooks/useNarrowViewport";
+import { FROZEN_COLOR, ROLE_LABELS, LAYER_HEX, LAYER_LABELS } from "./constants";
 
 function reputationColor(score: number): string {
   if (score >= 80) return "#00ff88";
@@ -28,26 +29,13 @@ function statusInfo(healthStatus: number) {
   return { label: "Unhealthy", color: "#ef4444" };
 }
 
-function formatUptime(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
-}
-
-function layerColor(layer: number): string {
-  if (layer === 0) return "#00ff88";
-  if (layer === 1) return "#38bdf8";
-  return "#f97316";
-}
-
 export function NodeDetail() {
   const selectedNodeId = useDashboardStore((s) => s.selectedNodeId);
   const nodes = useDashboardStore((s) => s.nodes);
   const nodeMetrics = useDashboardStore((s) => s.nodeMetrics);
   const nodeReputation = useDashboardStore((s) => s.nodeReputation);
   const setSelectedNodeId = useDashboardStore((s) => s.setSelectedNodeId);
+  const narrow = useNarrowViewport();
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -72,7 +60,8 @@ export function NodeDetail() {
   const m = nodeMetrics.get(selectedNodeId) ?? DEFAULT_METRICS;
   const rep = nodeReputation.get(selectedNodeId);
   const status = statusInfo(m.healthStatus);
-  const lColor = layerColor(node.layer);
+  const lColor = LAYER_HEX[node.layer] ?? LAYER_HEX[0];
+  const currentUptime = processUptimeSeconds(m.nodeStartTime, Date.now());
 
   return (
     <>
@@ -100,7 +89,7 @@ export function NodeDetail() {
           right: 0,
           bottom: 0,
           zIndex: 40,
-          width: 420,
+          width: narrow ? "100%" : 420,
           background: "#0a0f0a",
           borderLeft: "1px solid rgba(255,255,255,0.06)",
           pointerEvents: "auto",
@@ -201,7 +190,7 @@ export function NodeDetail() {
               background: "rgba(255,255,255,0.03)",
               borderRadius: 6,
               overflow: "hidden",
-              marginBottom: 28,
+              marginBottom: currentUptime != null && m.uptimeSeconds > 0 ? 10 : 28,
             }}
           >
             {rep && (
@@ -216,18 +205,30 @@ export function NodeDetail() {
               label="peers"
               color="rgba(255,255,255,0.7)"
             />
-            <HeroMetric
-              value={formatUptime(m.uptimeSeconds)}
-              label="uptime"
-              color="rgba(255,255,255,0.7)"
-            />
+            {currentUptime != null ? (
+              <HeroMetric
+                value={formatDuration(currentUptime)}
+                label="uptime"
+                color="rgba(255,255,255,0.7)"
+              />
+            ) : (
+              <HeroMetric
+                value={formatDuration(m.uptimeSeconds)}
+                label="lifetime online"
+                color="rgba(255,255,255,0.7)"
+              />
+            )}
           </div>
+          {currentUptime != null && m.uptimeSeconds > 0 && (
+            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", marginBottom: 28, textAlign: "right" }}>
+              {formatDuration(m.uptimeSeconds)} online in total, across restarts
+            </div>
+          )}
 
           <Section title="PACKETS">
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 20 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
               <MiniStat value={m.packetsReceived.toLocaleString()} label="received" color="#38bdf8" />
               <MiniStat value={m.packetsForwarded.toLocaleString()} label="forwarded" color="rgba(255,255,255,0.6)" />
-              <MiniStat value={m.dummyPacketsDropped.toLocaleString()} label="dropped" color="rgba(255,255,255,0.35)" />
             </div>
           </Section>
 
@@ -328,8 +329,8 @@ export function NodeDetail() {
               fontFamily: '"JetBrains Mono", monospace',
             }}
           >
-            <span>{m.buildVersion}</span>
-            <span>Layer {node.layer}</span>
+            <span>{m.buildVersion ? `v${m.buildVersion.replace(/^v/, "")}` : ""}</span>
+            <span>Layer {node.layer} · from on-chain role</span>
           </div>
         </div>
       </div>

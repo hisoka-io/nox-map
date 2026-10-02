@@ -4,9 +4,9 @@ import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { useDashboardStore } from "../store/useDashboardStore";
 import { isFrozenNode } from "../store/networkStats";
+import { useNodePlacement } from "../hooks/useNodePlacement";
 import {
   GLOBE_RADIUS,
-  NODE_POSITIONS,
   FROZEN_COLOR,
   LAYER_COLORS,
   LAYER_LABELS,
@@ -24,11 +24,12 @@ export function NodeMarkers() {
   const nodes = useDashboardStore((s) => s.nodes);
   const nodeMetrics = useDashboardStore((s) => s.nodeMetrics);
   const setSelectedNodeId = useDashboardStore((s) => s.setSelectedNodeId);
+  const placement = useNodePlacement();
 
   const nodeData = useMemo(
     () =>
-      nodes.map((node, i) => {
-        const pos = NODE_POSITIONS[i % NODE_POSITIONS.length];
+      nodes.map((node) => {
+        const pos = placement.positions.get(node.address) ?? [0, 0];
         const frozen = isFrozenNode(node);
         return {
           node,
@@ -37,7 +38,7 @@ export function NodeMarkers() {
           color: frozen ? FROZEN_MARKER_COLOR : (LAYER_COLORS[node.layer] ?? LAYER_COLORS[0]),
         };
       }),
-    [nodes],
+    [nodes, placement],
   );
 
   return (

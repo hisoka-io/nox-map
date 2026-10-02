@@ -3,7 +3,6 @@ import type {
   NodeMetrics,
   SseEvent,
 } from "../store/useDashboardStore";
-import { ROLE_LABELS } from "../components/constants";
 
 const MOCK_NODE_INFOS: NodeInfo[] = [
   {
@@ -155,6 +154,8 @@ interface NodeSim {
   unprofitable: number;
 }
 
+const MOCK_START_TIME = Math.floor(Date.now() / 1000);
+
 const nodeSims = new Map<string, NodeSim>(
   MOCK_NODE_INFOS.map((n) => [
     n.id,
@@ -229,67 +230,28 @@ export function generateMockNodeMetrics(
   return {
     activePeers: MOCK_NODE_INFOS.length - 1,
     uptimeSeconds: sim.simTime,
+    nodeStartTime: MOCK_START_TIME,
     healthStatus: coverDegraded ? 1 : 2,
     packetsReceived: sim.packetsReceived,
     packetsForwarded: sim.packetsForwarded,
-    dummyPacketsDropped: Math.floor(sim.packetsReceived * 0.12),
-    workerQueueDepth: Math.floor(jitter(isBurst ? 45 : 8, 5)),
-    mixQueueDepth: Math.floor(jitter(isBurst ? 80 : 20, 10)),
-    egressQueueDepth: Math.floor(jitter(isBurst ? 25 : 5, 3)),
-    ingestDropped: Math.floor(sim.packetsReceived * 0.002),
-    ingestDroppedBackpressure: Math.floor(sim.packetsReceived * 0.001),
     coverLoopGenerated: sim.coverLoop,
     coverDropGenerated: sim.coverDrop,
     coverLoopDegraded: coverDegraded,
     coverDropDegraded: false,
-    coverErrors: Math.floor(Math.random() * 2),
     cumulativeAuthorizedRevenueUsd: Math.round(sim.revenue) / 100,
     cumulativeCostUsd: Math.round(sim.cost) / 100,
     cumulativeMaximumCostUsd: Math.round(sim.cost * 1.2) / 100,
     ethPending: Math.floor(Math.random() * 3),
     profitableCount: sim.profitable,
     unprofitableCount: sim.unprofitable,
-    exitPayloadsDispatched: Math.floor(sim.packetsForwarded * 0.15),
-    exitReassemblerPending: Math.floor(Math.random() * 5),
-    exitEcho: Math.floor(sim.packetsForwarded * 0.03),
-    exitHttp: Math.floor(sim.packetsForwarded * 0.05),
-    exitRpc: Math.floor(sim.packetsForwarded * 0.02),
-    exitBroadcast: Math.floor(sim.packetsForwarded * 0.01),
+    exitPayloadsDispatched: node.role >= 2 ? Math.floor(sim.packetsForwarded * 0.15) : 0,
+    exitEcho: node.role >= 2 ? Math.floor(sim.packetsForwarded * 0.03) : 0,
+    exitHttp: node.role >= 2 ? Math.floor(sim.packetsForwarded * 0.05) : 0,
+    exitRpc: node.role >= 2 ? Math.floor(sim.packetsForwarded * 0.02) : 0,
+    exitBroadcast: node.role >= 2 ? Math.floor(sim.packetsForwarded * 0.01) : 0,
     exitEthereum: 0,
-    exitTraffic: Math.floor(sim.packetsForwarded * 0.04),
     ethTransactionsSubmitted: 0,
-    egressForwarded: Math.floor(sim.packetsForwarded * 0.85),
-    egressExited: Math.floor(sim.packetsForwarded * 0.15),
-    sphinxErrors: Math.floor(sim.packetsReceived * 0.001),
-    replayNew: sim.packetsReceived,
-    replayDuplicate: Math.floor(sim.packetsReceived * 0.001),
-    p2pRateLimitDenied: Math.floor(Math.random() * 2),
-    topologyLayer0: 6,
-    topologyLayer1: 5,
-    topologyLayer2: 4,
-    chainLastBlock: 19_000_000 + Math.floor(sim.simTime / 12),
-    chainErrors: 0,
-    processMem: Math.floor(jitter(85_000_000, 10_000_000)),
-    processVmem: Math.floor(jitter(250_000_000, 20_000_000)),
-    openFds: Math.floor(jitter(120, 20)),
     buildVersion: "0.1.0-mock",
-    buildRole: ROLE_LABELS[node.role] ?? "Relay",
-    ingressResponseBuffer:
-      node.ingress_port > 0 ? Math.floor(jitter(15, 8)) : 0,
-    fecSuccess: Math.floor(sim.packetsForwarded * 0.95),
-    fecError: Math.floor(sim.packetsForwarded * 0.01),
-    fecEncodeSuccess: Math.floor(sim.packetsForwarded * 0.47),
-    fecDecodeError: Math.floor(sim.packetsForwarded * 0.005),
-    oracleFetchStale: Math.floor(Math.random() * 3),
-    latencyP50: jitter(0.04, 0.01),
-    latencyP95: jitter(0.12, 0.03),
-    latencyP99: jitter(0.25, 0.05),
-    peersConnectedTotal: Math.floor(sim.simTime / 10) + 14,
-    peersDisconnectedTotal: Math.floor(sim.simTime / 30),
-    eventBusPacketProcessed:
-      sim.packetsReceived - Math.floor(Math.random() * 5),
-    eventBusPayloadDecrypted: Math.floor(sim.packetsReceived * 0.92),
-    eventBusSendPacket: sim.packetsForwarded,
   };
 }
 
@@ -308,14 +270,7 @@ export function generateMockEvents(
     const eventNodeId = nodeId ?? sourceNode.address;
     const ts = nowSec;
 
-    if (roll < 0.7) {
-      events.push({
-        kind: "packet_processed",
-        duration_ms: Math.floor(jitter(450, 400)),
-        node_id: eventNodeId,
-        timestamp: ts,
-      } as SseEvent);
-    } else if (roll < 0.85) {
+    if (roll < 0.75) {
       const kind = Math.random() < 0.6 ? "peer_connected" : "peer_disconnected" as const;
       events.push({
         kind,
