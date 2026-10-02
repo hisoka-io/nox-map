@@ -1,5 +1,5 @@
 {
-  "name": "nox-dashboard",
+  "name": "nox-map",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -13,6 +13,8 @@
     "clean": "rm -rf dist node_modules/.vite"
   },
   "dependencies": {
+    "@fontsource/jetbrains-mono": "5.3.0",
+    "@fontsource/space-grotesk": "5.3.0",
     "@react-three/drei": "9.122.0",
     "@react-three/fiber": "8.17.10",
     "react": "^18.3.1",
