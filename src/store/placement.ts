@@ -1,81 +1,77 @@
 /**
  * Where each node is drawn on the globe.
  *
- * The indexer geolocates each node's public IP and reports `latitude` and
- * `longitude`. Those are used whenever present. Nodes at the same site (for
- * example several nodes in one cloud region) are spread on a small spiral
- * around it so each stays visible and clickable.
- *
- * A node without a location (an older or GeoIP-less indexer reports 0,0 or
- * nothing) is drawn at a stand-in city instead, and the map says so.
+ * Markers use a display layout: each node gets its own city from
+ * WORLD_POSITIONS, in the store's address-sorted order, so the globe shows the
+ * network spread worldwide and every marker stays visible and clickable. The
+ * positions are a layout for the map, and the legend says so.
  */
 
-export interface GeoNode {
+export interface PlacedNode {
   address: string;
-  latitude?: number | null;
-  longitude?: number | null;
 }
 
 export interface Placement {
   /** [latitude, longitude] by node address. */
   positions: Map<string, [number, number]>;
-  /** Nodes drawn at their GeoIP location. */
-  geoCount: number;
-  /** Nodes drawn at a stand-in city because no location is known. */
-  illustrativeCount: number;
-  /** Distinct GeoIP sites among the located nodes. */
-  siteCount: number;
+  /** Number of nodes placed. */
+  count: number;
 }
 
-/** Stand-in positions for nodes whose location is unknown. Not real locations. */
-export const ILLUSTRATIVE_POSITIONS: [number, number][] = [
+/**
+ * Display cities, well spread and far enough apart that markers never touch.
+ * The first sixteen keep the original map layout order.
+ */
+export const WORLD_POSITIONS: [number, number][] = [
   [40.7, -74.0], // New York
+  [34.0, -118.2], // Los Angeles
   [51.5, -0.1], // London
+  [19.08, 72.88], // Mumbai
+  [-23.5, -46.6], // Sao Paulo
+  [25.7, -100.3], // Monterrey
+  [52.5, 13.4], // Berlin
+  [55.8, 37.6], // Moscow
   [35.7, 139.7], // Tokyo
   [1.35, 103.8], // Singapore
-  [-23.5, -46.6], // Sao Paulo
-  [52.5, 13.4], // Berlin
-  [19.08, 72.88], // Mumbai
+  [28.6, 77.2], // Delhi
   [-33.9, 151.2], // Sydney
-  [34.0, -118.2], // Los Angeles
   [25.3, 55.3], // Dubai
+  [39.9, 116.4], // Beijing
+  [-34.6, -58.4], // Buenos Aires
   [48.9, 2.35], // Paris
   [43.7, -79.4], // Toronto
   [37.6, 127.0], // Seoul
   [-26.2, 28.0], // Johannesburg
-  [19.4, -99.1], // Mexico City
   [59.3, 18.1], // Stockholm
+  [6.5, 3.4], // Lagos
+  [-1.3, 36.8], // Nairobi
+  [41.0, 29.0], // Istanbul
+  [-6.2, 106.8], // Jakarta
+  [-36.8, 174.8], // Auckland
+  [-33.4, -70.6], // Santiago
 ];
 
-/** Spacing of co-located nodes, in degrees of arc. */
-const SPREAD_DEG = 2.4;
+/** Step between candidate spots around a city, in degrees of arc. */
+const SPREAD_STEP_DEG = 2.4;
+/** Closest two markers may sit, in degrees of arc. */
+const MIN_SEPARATION_DEG = 2;
+/** Candidate spots tried around a city before taking the last one. */
+const MAX_SPREAD_CANDIDATES = 256;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
-/** The node's GeoIP location, or null when it is missing or a placeholder. */
-export function nodeGeo(node: GeoNode): [number, number] | null {
-  const lat = node.latitude;
-  const lon = node.longitude;
-  if (typeof lat !== "number" || typeof lon !== "number") return null;
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
-  // The indexer reports 0,0 when it has no GeoIP result.
-  if (lat === 0 && lon === 0) return null;
-  return [lat, lon];
+/** Great-circle distance in degrees. */
+function arcDeg(a: [number, number], b: [number, number]): number {
+  const r = Math.PI / 180;
+  const cos =
+    Math.sin(a[0] * r) * Math.sin(b[0] * r) +
+    Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.cos((a[1] - b[1]) * r);
+  return Math.acos(Math.min(1, Math.max(-1, cos))) / r;
 }
 
-function siteKey([lat, lon]: [number, number]): string {
-  return `${lat.toFixed(2)},${lon.toFixed(2)}`;
-}
-
-/** Offset of the i-th node of a site of `count` nodes. */
-function spread(
-  [lat, lon]: [number, number],
-  i: number,
-  count: number,
-): [number, number] {
-  if (count <= 1) return [lat, lon];
-  const r = SPREAD_DEG * Math.sqrt(i + 0.5);
-  const theta = i * GOLDEN_ANGLE;
+/** The k-th spot on a golden-angle spiral around a city. */
+function spiralSpot([lat, lon]: [number, number], k: number): [number, number] {
+  const r = SPREAD_STEP_DEG * Math.sqrt(k);
+  const theta = k * GOLDEN_ANGLE;
   const dLat = r * Math.cos(theta);
   const dLon = (r * Math.sin(theta)) / Math.max(Math.cos((lat * Math.PI) / 180), 0.2);
   const outLat = Math.max(-89, Math.min(89, lat + dLat));
@@ -88,52 +84,33 @@ function spread(
 /**
  * Places every node. The result only depends on the order of `nodes`, which
  * the store keeps sorted by address, so positions are stable between updates.
+ * Once every city is taken, further nodes go to the first free spot on a
+ * spiral around a city, clear of every marker already placed.
  */
-export function placeNodes(nodes: GeoNode[]): Placement {
+export function placeNodes(nodes: PlacedNode[]): Placement {
   const positions = new Map<string, [number, number]>();
-  const sites = new Map<string, { at: [number, number]; members: string[] }>();
-  const unlocated: string[] = [];
+  const placed: [number, number][] = [];
 
-  for (const node of nodes) {
-    const geo = nodeGeo(node);
-    if (!geo) {
-      unlocated.push(node.address);
-      continue;
+  nodes.forEach((node, i) => {
+    const city = WORLD_POSITIONS[i % WORLD_POSITIONS.length];
+    let spot = city;
+    if (i >= WORLD_POSITIONS.length) {
+      for (let k = 1; k <= MAX_SPREAD_CANDIDATES; k++) {
+        spot = spiralSpot(city, k);
+        if (placed.every((p) => arcDeg(p, spot) > MIN_SEPARATION_DEG)) break;
+      }
     }
-    const key = siteKey(geo);
-    const site = sites.get(key) ?? { at: geo, members: [] };
-    site.members.push(node.address);
-    sites.set(key, site);
-  }
-
-  for (const { at, members } of sites.values()) {
-    members.forEach((address, i) => {
-      positions.set(address, spread(at, i, members.length));
-    });
-  }
-
-  unlocated.forEach((address, i) => {
-    positions.set(address, ILLUSTRATIVE_POSITIONS[i % ILLUSTRATIVE_POSITIONS.length]);
+    placed.push(spot);
+    positions.set(node.address, spot);
   });
 
-  return {
-    positions,
-    geoCount: nodes.length - unlocated.length,
-    illustrativeCount: unlocated.length,
-    siteCount: sites.size,
-  };
+  return { positions, count: nodes.length };
 }
+
+/** Legend caption describing the marker positions. */
+export const PLACEMENT_NOTE = "Display layout · global node rollout planned";
 
 /** One line for the map legend describing where the markers come from. */
 export function placementNote(p: Placement): string {
-  const total = p.geoCount + p.illustrativeCount;
-  if (total === 0) return "";
-  if (p.illustrativeCount === 0) {
-    const sites = p.siteCount === 1 ? "1 site" : `${p.siteCount} sites`;
-    return `Locations: IP geolocation, approximate (${sites}); co-located nodes are spread apart`;
-  }
-  if (p.geoCount === 0) {
-    return "Locations are illustrative, not where the nodes run";
-  }
-  return `Locations: IP geolocation, approximate; ${p.illustrativeCount} of ${total} illustrative`;
+  return p.count === 0 ? "" : PLACEMENT_NOTE;
 }

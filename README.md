@@ -20,9 +20,10 @@ Everything comes from a [nox-indexer](https://github.com/hisoka-io/nox-indexer):
 WebSocket. The indexer defaults to `https://api.hisoka.io`; set
 `VITE_API_BASE_URL` at build time to use another one.
 
-- **Node positions** use the indexer's IP geolocation (`latitude`/`longitude`).
-  Nodes at the same site are spread on a small spiral so each stays visible.
-  Nodes without a location are drawn at stand-in cities, and the map says so.
+- **Node positions** are a display layout: each registered node is drawn at
+  its own world city, in a stable order, and the legend labels the layout.
+  Global node rollout is planned, and the indexer's IP geolocation
+  (`latitude`/`longitude`) stays available in its API.
 - **Mix layers** are derived from each node's on-chain role and address, with
   the same rule the nodes use.
 - **Arcs** are driven by growth in each node's counters (packets forwarded,

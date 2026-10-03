@@ -2,20 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  ILLUSTRATIVE_POSITIONS,
-  nodeGeo,
+  PLACEMENT_NOTE,
+  WORLD_POSITIONS,
   placeNodes,
   placementNote,
 } from "../src/store/placement.ts";
 
-const ASHBURN = { latitude: 39.0469, longitude: -77.4903 };
-
-function located(i: number, geo: { latitude?: unknown; longitude?: unknown } = ASHBURN) {
-  return { address: `0x${i.toString(16).padStart(40, "0")}`, ...geo } as {
-    address: string;
-    latitude?: number;
-    longitude?: number;
-  };
+function node(i: number, geo: { latitude?: number; longitude?: number } = {}) {
+  return { address: `0x${i.toString(16).padStart(40, "0")}`, ...geo };
 }
 
 /** Great-circle distance in degrees. */
@@ -27,54 +21,55 @@ function arcDeg(a: [number, number], b: [number, number]): number {
   return Math.acos(Math.min(1, Math.max(-1, cos))) / r;
 }
 
-test("nodeGeo rejects missing, invalid and 0,0 locations", () => {
-  assert.deepEqual(nodeGeo(located(1)), [39.0469, -77.4903]);
-  assert.equal(nodeGeo(located(1, {})), null);
-  assert.equal(nodeGeo(located(1, { latitude: 0, longitude: 0 })), null);
-  assert.equal(nodeGeo(located(1, { latitude: 91, longitude: 0 })), null);
-  assert.equal(nodeGeo(located(1, { latitude: "39", longitude: "-77" })), null);
-  assert.equal(nodeGeo(located(1, { latitude: NaN, longitude: 3 })), null);
-});
-
-test("co-located nodes stay near their site but apart from each other", () => {
-  const nodes = Array.from({ length: 10 }, (_, i) => located(i));
-  const p = placeNodes(nodes);
-
-  assert.equal(p.geoCount, 10);
-  assert.equal(p.illustrativeCount, 0);
-  assert.equal(p.siteCount, 1);
-
-  const points = nodes.map((n) => p.positions.get(n.address)!);
-  for (const pt of points) {
-    assert.ok(arcDeg(pt, [ASHBURN.latitude, ASHBURN.longitude]) < 8, `${pt} drifted`);
-  }
+function assertApart(points: [number, number][], minDeg: number) {
   for (let i = 0; i < points.length; i++) {
     for (let j = i + 1; j < points.length; j++) {
-      assert.ok(arcDeg(points[i], points[j]) > 1.5, `nodes ${i} and ${j} overlap`);
+      assert.ok(
+        arcDeg(points[i], points[j]) > minDeg,
+        `points ${i} and ${j} overlap (${arcDeg(points[i], points[j]).toFixed(2)} deg)`,
+      );
     }
   }
+}
+
+test("the city list has 16+ distinct, well separated cities", () => {
+  assert.ok(WORLD_POSITIONS.length >= 16);
+  assertApart(WORLD_POSITIONS, 3);
+});
+
+test("each node gets its own city in store order", () => {
+  const nodes = Array.from({ length: 10 }, (_, i) => node(i));
+  const p = placeNodes(nodes);
+
+  assert.equal(p.count, 10);
+  nodes.forEach((n, i) => {
+    assert.deepEqual(p.positions.get(n.address), WORLD_POSITIONS[i]);
+  });
 
   // Same input order, same positions.
   assert.deepEqual(placeNodes(nodes).positions, p.positions);
 });
 
-test("a lone node sits exactly at its location", () => {
-  const p = placeNodes([located(1), located(2, { latitude: 19.07, longitude: 72.89 })]);
-  assert.deepEqual(p.positions.get(located(2).address), [19.07, 72.89]);
-  assert.equal(p.siteCount, 2);
+test("GeoIP coordinates do not move a node", () => {
+  const p = placeNodes([
+    node(1, { latitude: 39.0469, longitude: -77.4903 }),
+    node(2, { latitude: 39.0469, longitude: -77.4903 }),
+  ]);
+  assert.deepEqual(p.positions.get(node(1).address), WORLD_POSITIONS[0]);
+  assert.deepEqual(p.positions.get(node(2).address), WORLD_POSITIONS[1]);
 });
 
-test("without GeoIP the stand-in positions are used and labelled", () => {
-  const nodes = [located(1, {}), located(2, { latitude: 0, longitude: 0 })];
-  const p = placeNodes(nodes);
-  assert.equal(p.illustrativeCount, 2);
-  assert.deepEqual(p.positions.get(nodes[0].address), ILLUSTRATIVE_POSITIONS[0]);
-  assert.deepEqual(p.positions.get(nodes[1].address), ILLUSTRATIVE_POSITIONS[1]);
-  assert.match(placementNote(p), /illustrative/i);
+test("more nodes than cities still get distinct, separate markers", () => {
+  const nodes = Array.from({ length: WORLD_POSITIONS.length * 3 }, (_, i) => node(i));
+  const points = nodes.map((n) => placeNodes(nodes).positions.get(n.address)!);
+  assertApart(points, 1.5);
+  for (const [lat, lon] of points) {
+    assert.ok(Math.abs(lat) <= 90 && Math.abs(lon) <= 180, `${lat},${lon} out of range`);
+  }
 });
 
-test("placementNote says where the positions come from", () => {
-  assert.match(placementNote(placeNodes([located(1), located(2)])), /IP geolocation.*1 site/);
-  assert.match(placementNote(placeNodes([located(1), located(2, {})])), /1 of 2 illustrative/);
+test("placementNote shows the display-layout caption when nodes exist", () => {
+  assert.equal(placementNote(placeNodes([node(1)])), PLACEMENT_NOTE);
+  assert.equal(PLACEMENT_NOTE, "Display layout · global node rollout planned");
   assert.equal(placementNote(placeNodes([])), "");
 });
