@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import { useDashboardStore } from "../store/useDashboardStore";
-import { computeHeadline, isOnlineNode } from "../store/networkStats";
-import { ARC_COLORS } from "./constants";
+import { averagePeers, computeHeadline, isOnlineNode } from "../store/networkStats";
+import { placementNote } from "../store/placement";
+import { useNodePlacement } from "../hooks/useNodePlacement";
+import { useNarrowViewport } from "../hooks/useNarrowViewport";
+import { ARC_COLORS, ARC_LABELS } from "./constants";
 
 interface TickerCategory {
   label: string;
@@ -9,12 +12,12 @@ interface TickerCategory {
   color: string;
 }
 
-const ARC_LEGEND = [
-  { label: "Real Packet", color: ARC_COLORS.real },
-  { label: "Cover Loop", color: ARC_COLORS.coverLoop },
-  { label: "Cover Drop", color: ARC_COLORS.coverDrop },
-  { label: "Exit TX", color: ARC_COLORS.exitTx },
-];
+const ARC_LEGEND = (Object.keys(ARC_LABELS) as (keyof typeof ARC_LABELS)[]).map((kind) => ({
+  label: ARC_LABELS[kind],
+  color: ARC_COLORS[kind],
+}));
+
+const ARC_NOTE = "Arcs follow live traffic counters; their endpoints are illustrative, as routes are private";
 
 export function BottomTicker() {
   const nodeMetrics = useDashboardStore((s) => s.nodeMetrics);
@@ -25,6 +28,9 @@ export function BottomTicker() {
   const registeredCount = useDashboardStore(
     (s) => s.nodes.filter((n) => n.status !== "deregistered").length,
   );
+  const placement = useNodePlacement();
+  const narrow = useNarrowViewport();
+  const note = placementNote(placement);
 
   const categories = useMemo((): TickerCategory[] => {
     const all = Array.from(nodeMetrics.values());
@@ -39,12 +45,12 @@ export function BottomTicker() {
 
     const headline = computeHeadline(nodeMetrics, networkTotals);
     // Peers is a live gauge, so it always comes from the current nodes.
-    const totalPeers = all.reduce((a, m) => a + m.activePeers, 0);
+    const avgPeers = averagePeers(all);
 
     return [
       { label: "RECEIVED", value: fmt(headline.packetsReceived), color: "#38bdf8" },
       { label: "FORWARDED", value: fmt(headline.packetsForwarded), color: "#00ff88" },
-      { label: "PEERS", value: fmt(totalPeers), color: "#f59e0b" },
+      { label: "PEERS/NODE", value: avgPeers != null ? String(avgPeers) : "—", color: "#f59e0b" },
       { label: "EXIT OPS", value: fmt(headline.exitOps), color: "#a78bfa" },
       { label: "WEB3 TXs", value: fmt(headline.exitEthereum), color: "#22c55e" },
       { label: "NODES ONLINE", value: `${onlineCount}/${registeredCount}`, color: "#22c55e" },
@@ -66,13 +72,30 @@ export function BottomTicker() {
         flexDirection: "column",
       }}
     >
+      {note && (
+        <div
+          title={ARC_NOTE}
+          style={{
+            textAlign: "center",
+            fontSize: "11px",
+            color: "rgba(255,255,255,0.35)",
+            padding: "4px 12px",
+            background: "rgba(5,10,5,0.55)",
+            letterSpacing: "0.04em",
+          }}
+        >
+          {note}
+          {!narrow && <> · {ARC_NOTE}</>}
+        </div>
+      )}
       <div
         style={{
           display: "flex",
+          flexWrap: "wrap",
           alignItems: "center",
           justifyContent: "center",
-          gap: 24,
-          padding: "5px 0",
+          gap: narrow ? "4px 14px" : 24,
+          padding: "5px 8px",
           background: "rgba(5,10,5,0.7)",
           borderTop: "1px solid rgba(0,255,136,0.05)",
         }}
@@ -107,9 +130,12 @@ export function BottomTicker() {
       <div
         style={{
           display: "flex",
+          flexWrap: "wrap",
           alignItems: "center",
           justifyContent: "center",
-          height: 64,
+          rowGap: 6,
+          minHeight: 64,
+          padding: narrow ? "8px 4px" : 0,
           background: "rgba(5,10,5,0.92)",
           borderTop: "1px solid rgba(0,255,136,0.08)",
           position: "relative",
@@ -122,16 +148,16 @@ export function BottomTicker() {
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              padding: "0 18px",
+              padding: narrow ? "0 8px" : "0 18px",
               borderRight:
-                i < categories.length - 1
+                !narrow && i < categories.length - 1
                   ? "1px solid rgba(0,255,136,0.06)"
                   : "none",
             }}
           >
             <div
               style={{
-                fontSize: "20px",
+                fontSize: narrow ? "15px" : "20px",
                 fontWeight: 700,
                 fontFamily: '"Space Grotesk", sans-serif',
                 color: cat.color,
@@ -154,6 +180,7 @@ export function BottomTicker() {
           </div>
         ))}
 
+        {!narrow && (
         <a
           href="https://github.com/hisoka-io/nox"
           target="_blank"
@@ -188,6 +215,7 @@ export function BottomTicker() {
             hisoka-io
           </span>
         </a>
+        )}
       </div>
     </footer>
   );

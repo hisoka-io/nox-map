@@ -2,10 +2,16 @@ import * as THREE from "three";
 
 export const GLOBE_RADIUS = 1.4;
 
+export const LAYER_HEX: Record<number, string> = {
+  0: "#00ff88", // Entry
+  1: "#38bdf8", // Mix
+  2: "#f97316", // Exit
+};
+
 export const LAYER_COLORS: Record<number, THREE.Color> = {
-  0: new THREE.Color("#00ff88"), // Entry
-  1: new THREE.Color("#38bdf8"), // Mix
-  2: new THREE.Color("#f97316"), // Exit
+  0: new THREE.Color(LAYER_HEX[0]),
+  1: new THREE.Color(LAYER_HEX[1]),
+  2: new THREE.Color(LAYER_HEX[2]),
 };
 
 // Registered but barred from routing by the registry.
@@ -23,33 +29,20 @@ export const ROLE_LABELS: Record<number, string> = {
   3: "Full",
 };
 
+/** Arc colours by the counter that drives them (see store/arcPlan.ts). */
 export const ARC_COLORS = {
-  real: "#38bdf8",
+  relayed: "#38bdf8",
   coverLoop: "#00ff88",
   coverDrop: "#f59e0b",
-  exitTx: "#a78bfa",
+  exit: "#a78bfa",
 };
 
-// TODO: currently we are hardcoding location, this should be fixed asap
-// according to the real location from nodes when we are going to mainnet
-export const NODE_POSITIONS: [number, number][] = [
-  [40.7, -74.0], // nox-0:  New York
-  [34.0, -118.2], // nox-1:  Los Angeles
-  [51.5, -0.1], // nox-2:  London
-  [19.08, 72.88], // nox-3:  Mumbai
-  [-23.5, -46.6], // nox-4:  Sao Paulo
-  [25.7, -100.3], // nox-5:  Monterrey
-  [52.5, 13.4], // nox-6:  Berlin
-  [55.8, 37.6], // nox-7:  Moscow
-  [35.7, 139.7], // nox-8:  Tokyo
-  [1.35, 103.8], // nox-9:  Singapore
-  [28.6, 77.2], // nox-10: Delhi
-  [-33.9, 151.2], // nox-11: Sydney
-  [25.3, 55.3], // nox-12: Dubai
-  [39.9, 116.4], // nox-13: Beijing
-  [-34.6, -58.4], // nox-14: Buenos Aires
-  [48.9, 2.35], // nox-15: Paris
-];
+export const ARC_LABELS = {
+  relayed: "Relayed Packet",
+  coverLoop: "Cover Loop",
+  coverDrop: "Cover Drop",
+  exit: "Exit Payload",
+};
 
 export function latLonToVec3(
   lat: number,

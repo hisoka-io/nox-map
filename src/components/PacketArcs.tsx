@@ -1,13 +1,11 @@
 import { useRef, useState, useEffect, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { useDashboardStore } from "../store/useDashboardStore";
-import {
-  GLOBE_RADIUS,
-  NODE_POSITIONS,
-  ARC_COLORS,
-  latLonToVec3,
-} from "./constants";
+import { useDashboardStore, type NodeInfo } from "../store/useDashboardStore";
+import { planArcs, type ArcKind, type CounterSample } from "../store/arcPlan";
+import { isOnlineNode } from "../store/networkStats";
+import { useNodePlacement } from "../hooks/useNodePlacement";
+import { GLOBE_RADIUS, ARC_COLORS, latLonToVec3 } from "./constants";
 
 interface ArcData {
   id: number;
@@ -17,32 +15,28 @@ interface ArcData {
   duration: number;
 }
 
+const MAX_ARCS = 120;
+
 let arcIdCounter = 0;
 
-function getNodePosition(nodeIdx: number): [number, number] | null {
-  if (NODE_POSITIONS.length === 0) return null;
-  return NODE_POSITIONS[nodeIdx % NODE_POSITIONS.length];
-}
-
 function createArc(
-  fromNodeIdx: number,
-  toNodeIdx: number,
+  from: [number, number] | undefined,
+  to: [number, number] | undefined,
   color: string,
   now: number,
 ): ArcData | null {
-  if (fromNodeIdx === toNodeIdx) return null;
-  const fromPos = getNodePosition(fromNodeIdx);
-  const toPos = getNodePosition(toNodeIdx);
-  if (!fromPos || !toPos) return null;
+  if (!from || !to) return null;
+  if (from[0] === to[0] && from[1] === to[1]) return null;
 
-  const start = latLonToVec3(fromPos[0], fromPos[1], GLOBE_RADIUS * 1.01);
-  const end = latLonToVec3(toPos[0], toPos[1], GLOBE_RADIUS * 1.01);
+  const start = latLonToVec3(from[0], from[1], GLOBE_RADIUS * 1.01);
+  const end = latLonToVec3(to[0], to[1], GLOBE_RADIUS * 1.01);
 
+  // Lift scales with distance, so arcs between co-located nodes stay low.
   const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
   const dist = start.distanceTo(end);
   mid
     .normalize()
-    .multiplyScalar(GLOBE_RADIUS * 1.25 + dist * 0.2 + Math.random() * 0.15);
+    .multiplyScalar(GLOBE_RADIUS * 1.03 + dist * 0.3 + Math.random() * 0.05);
 
   return {
     id: arcIdCounter++,
@@ -53,177 +47,89 @@ function createArc(
   };
 }
 
-function pickRandom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+function pickOther(candidates: string[], self: string): string | undefined {
+  const others = candidates.filter((a) => a !== self);
+  if (others.length === 0) return undefined;
+  return others[Math.floor(Math.random() * others.length)];
+}
+
+/** Symbolic endpoints for one arc; real paths are not observable by design. */
+function endpoints(
+  kind: ArcKind,
+  node: NodeInfo,
+  byLayer: Map<number, string[]>,
+  all: string[],
+): [string, string] | null {
+  const self = node.address;
+  let peer: string | undefined;
+  switch (kind) {
+    case "relayed":
+      // Forwarded to the next layer; an exit's forwarded packets came from the mix layer.
+      if (node.layer >= 2) {
+        peer = pickOther(byLayer.get(1) ?? all, self);
+        return peer ? [peer, self] : null;
+      }
+      peer = pickOther(byLayer.get(node.layer + 1) ?? all, self);
+      return peer ? [self, peer] : null;
+    case "exit":
+      peer = pickOther(byLayer.get(1) ?? all, self);
+      return peer ? [peer, self] : null;
+    case "coverLoop":
+    case "coverDrop":
+      peer = pickOther(all, self);
+      return peer ? [self, peer] : null;
+  }
 }
 
 export function PacketArcs() {
   const [arcs, setArcs] = useState<ArcData[]>([]);
   const nodes = useDashboardStore((s) => s.nodes);
-  const nodeEvents = useDashboardStore((s) => s.nodeEvents);
   const nodeMetrics = useDashboardStore((s) => s.nodeMetrics);
+  const placement = useNodePlacement();
 
-  const prevCountsRef = useRef(new Map<string, number>());
-  const prevCoverRef = useRef(
-    new Map<string, { loop: number; drop: number }>(),
-  );
+  const prevCountersRef = useRef(new Map<string, CounterSample>());
 
   useEffect(() => {
-    if (nodes.length < 2) return;
+    const { next, spawns } = planArcs(prevCountersRef.current, nodeMetrics);
+    prevCountersRef.current = next;
 
-    const now = performance.now() / 1000;
-    const newArcs: ArcData[] = [];
+    const routable = nodes.filter(isOnlineNode);
+    if (routable.length < 2 || spawns.length === 0) return;
 
-    const byLayer: Map<number, number[]> = new Map();
-    nodes.forEach((n, idx) => {
+    const byAddress = new Map(routable.map((n) => [n.address, n]));
+    const byLayer = new Map<number, string[]>();
+    for (const n of routable) {
       const list = byLayer.get(n.layer) ?? [];
-      list.push(idx);
+      list.push(n.address);
       byLayer.set(n.layer, list);
-    });
-
-    for (const [nodeAddr, events] of nodeEvents) {
-      const currentCount = events.length;
-
-      // First sight of a node: seed the counter without spawning arcs so
-      // the initial backlog from the indexer doesn't produce a burst.
-      if (!prevCountsRef.current.has(nodeAddr)) {
-        prevCountsRef.current.set(nodeAddr, currentCount);
-        continue;
-      }
-
-      const prevCount = prevCountsRef.current.get(nodeAddr) ?? 0;
-      if (currentCount <= prevCount) continue;
-
-      const newCount = currentCount - prevCount;
-      const nodeIdx = nodes.findIndex((n) => n.address === nodeAddr);
-      if (nodeIdx === -1) continue;
-
-      const node = nodes[nodeIdx];
-
-      for (let i = 0; i < Math.min(newCount, 3); i++) {
-        const evt = events[i];
-
-        if (evt.kind === "packet_processed") {
-          const prevLayerNodes = byLayer.get(node.layer - 1) ?? byLayer.get(node.layer) ?? [];
-          const nextLayerNodes = byLayer.get(node.layer + 1) ?? byLayer.get(node.layer) ?? [];
-
-          if (prevLayerNodes.length > 0) {
-            const srcIdx = pickRandom(prevLayerNodes);
-            const arc = createArc(srcIdx, nodeIdx, ARC_COLORS.real, now + i * 0.2);
-            if (arc) newArcs.push(arc);
-          }
-
-          if (nextLayerNodes.length > 0 && Math.random() < 0.5) {
-            const dstIdx = pickRandom(nextLayerNodes);
-            const arc = createArc(nodeIdx, dstIdx, ARC_COLORS.real, now + 0.5 + i * 0.2);
-            if (arc) newArcs.push(arc);
-          }
-        } else if (evt.kind === "peer_connected") {
-          const otherIdx = Math.floor(Math.random() * nodes.length);
-          if (otherIdx !== nodeIdx) {
-            const arc = createArc(otherIdx, nodeIdx, ARC_COLORS.coverLoop, now);
-            if (arc) newArcs.push(arc);
-          }
-        } else if (evt.kind === "peer_disconnected") {
-          const otherIdx = Math.floor(Math.random() * nodes.length);
-          if (otherIdx !== nodeIdx) {
-            const arc = createArc(nodeIdx, otherIdx, ARC_COLORS.coverDrop, now);
-            if (arc) newArcs.push(arc);
-          }
-        } else if (evt.kind === "topology_add") {
-          const entryCandidates = byLayer.get(0) ?? [];
-          if (entryCandidates.length > 0) {
-            const srcIdx = pickRandom(entryCandidates);
-            const arc = createArc(srcIdx, nodeIdx, ARC_COLORS.exitTx, now);
-            if (arc) newArcs.push(arc);
-          }
-        }
-      }
-
-      prevCountsRef.current.set(nodeAddr, currentCount);
     }
-
-    if (newArcs.length > 0) {
-      setArcs((prev) => {
-        const alive = prev.filter((a) => now - a.birth < a.duration + 0.5);
-        return [...alive, ...newArcs].slice(-120);
-      });
-    }
-  }, [nodeEvents, nodes]);
-
-  // Cover traffic arcs are driven by real per-node coverLoopGenerated /
-  // coverDropGenerated counter deltas reported by the backend. Source/dest
-  // are picked symbolically because mixnet path unlinkability is by design —
-  // the backend cannot (and must not) reveal the actual hop path.
-  useEffect(() => {
-    if (nodes.length < 2) return;
+    const all = routable.map((n) => n.address);
 
     const now = performance.now() / 1000;
     const newArcs: ArcData[] = [];
-
-    for (const [addr, metrics] of nodeMetrics) {
-      // First sight of a node: seed the counter without spawning arcs so
-      // the initial counter values from the indexer don't produce a burst.
-      if (!prevCoverRef.current.has(addr)) {
-        prevCoverRef.current.set(addr, {
-          loop: metrics.coverLoopGenerated,
-          drop: metrics.coverDropGenerated,
-        });
-        continue;
-      }
-
-      const prev = prevCoverRef.current.get(addr)!;
-      const loopDelta = metrics.coverLoopGenerated - prev.loop;
-      const dropDelta = metrics.coverDropGenerated - prev.drop;
-
-      const nodeIdx = nodes.findIndex((n) => n.address === addr);
-      if (nodeIdx === -1) {
-        prevCoverRef.current.set(addr, {
-          loop: metrics.coverLoopGenerated,
-          drop: metrics.coverDropGenerated,
-        });
-        continue;
-      }
-
-      // Cap arcs spawned per metric tick so a large counter jump on first
-      // sight doesn't flood the scene.
-      const loopArcs = Math.min(Math.max(loopDelta, 0), 3);
-      const dropArcs = Math.min(Math.max(dropDelta, 0), 2);
-
-      for (let i = 0; i < loopArcs; i++) {
-        const otherIdx = Math.floor(Math.random() * nodes.length);
+    for (const { address, kind, count } of spawns) {
+      const node = byAddress.get(address);
+      if (!node) continue;
+      for (let i = 0; i < count; i++) {
+        const ends = endpoints(kind, node, byLayer, all);
+        if (!ends) continue;
         const arc = createArc(
-          nodeIdx,
-          otherIdx,
-          ARC_COLORS.coverLoop,
-          now + i * 0.15,
+          placement.positions.get(ends[0]),
+          placement.positions.get(ends[1]),
+          ARC_COLORS[kind],
+          now + i * 0.2,
         );
         if (arc) newArcs.push(arc);
       }
-      for (let i = 0; i < dropArcs; i++) {
-        const otherIdx = Math.floor(Math.random() * nodes.length);
-        const arc = createArc(
-          nodeIdx,
-          otherIdx,
-          ARC_COLORS.coverDrop,
-          now + i * 0.15,
-        );
-        if (arc) newArcs.push(arc);
-      }
-
-      prevCoverRef.current.set(addr, {
-        loop: metrics.coverLoopGenerated,
-        drop: metrics.coverDropGenerated,
-      });
     }
 
     if (newArcs.length > 0) {
       setArcs((prev) => {
         const alive = prev.filter((a) => now - a.birth < a.duration + 0.5);
-        return [...alive, ...newArcs].slice(-120);
+        return [...alive, ...newArcs].slice(-MAX_ARCS);
       });
     }
-  }, [nodeMetrics, nodes]);
+  }, [nodeMetrics, nodes, placement]);
 
   return (
     <group>

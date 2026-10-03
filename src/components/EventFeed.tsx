@@ -1,8 +1,13 @@
 import { useMemo } from "react";
-import { useDashboardStore, type SseEvent } from "../store/useDashboardStore";
+import {
+  useDashboardStore,
+  type ActivityEntry,
+  type SseEvent,
+} from "../store/useDashboardStore";
+import { useNarrowViewport } from "../hooks/useNarrowViewport";
 
 const EVENT_COLORS: Record<string, string> = {
-  packet_processed: "#38bdf8",
+  activity: "#38bdf8",
   peer_connected: "#00ff88",
   peer_disconnected: "#f59e0b",
   topology_add: "#a78bfa",
@@ -10,10 +15,15 @@ const EVENT_COLORS: Record<string, string> = {
   node_started: "#22c55e",
 };
 
+const MAX_ROWS = 10;
+const MAX_NODE_EVENTS = 5;
+
+function plural(n: number, one: string, many: string): string {
+  return `${n.toLocaleString()} ${n === 1 ? one : many}`;
+}
+
 function formatEventCompact(e: SseEvent): string {
   switch (e.kind) {
-    case "packet_processed":
-      return `Packet mixed ${e.duration_ms}ms`;
     case "peer_connected":
       return "Peer connected";
     case "peer_disconnected":
@@ -29,19 +39,25 @@ function formatEventCompact(e: SseEvent): string {
 
 function formatEventDetail(e: SseEvent, nodeId: string): string {
   switch (e.kind) {
-    case "packet_processed":
-      return `${nodeId} — mixed in ${e.duration_ms}ms`;
     case "peer_connected":
-      return `${e.peer_id.slice(0, 16)}... → ${nodeId}`;
+      return `${String(e.peer_id).slice(0, 16)}... → ${nodeId}`;
     case "peer_disconnected":
-      return `${e.peer_id.slice(0, 16)}... ← ${nodeId}`;
+      return `${String(e.peer_id).slice(0, 16)}... ← ${nodeId}`;
     case "topology_add":
-      return `${e.address.slice(0, 12)}... stake: ${e.stake.slice(0, 8)}`;
+      return `${String(e.address).slice(0, 12)}... stake: ${String(e.stake).slice(0, 8)}`;
     case "topology_remove":
-      return `${e.address.slice(0, 12)}...`;
+      return `${String(e.address).slice(0, 12)}...`;
     case "node_started":
       return nodeId;
   }
+}
+
+function formatActivity(a: ActivityEntry): string {
+  if (a.relayed > 0 && a.exits > 0) {
+    return `${a.relayed.toLocaleString()} relayed · ${a.exits.toLocaleString()} exited`;
+  }
+  if (a.relayed > 0) return `Relayed ${plural(a.relayed, "packet", "packets")}`;
+  return `Exited ${plural(a.exits, "payload", "payloads")}`;
 }
 
 function findNodeId(
@@ -51,47 +67,63 @@ function findNodeId(
   return nodes.find((n) => n.address === addr)?.id ?? addr.slice(0, 10);
 }
 
+interface Row {
+  key: string;
+  nodeAddr: string;
+  ts: number;
+  color: string;
+  text: string;
+  detail: string;
+}
+
+/**
+ * Recent network activity: node and peer events as they arrive, and traffic
+ * counted from each node's counters between metric updates (packets are not
+ * listed one by one).
+ */
 export function EventFeed() {
   const nodeEvents = useDashboardStore((s) => s.nodeEvents);
+  const activity = useDashboardStore((s) => s.activity);
   const nodes = useDashboardStore((s) => s.nodes);
-
+  const narrow = useNarrowViewport();
 
   const events = useMemo(() => {
-    type Entry = { event: SseEvent; nodeAddr: string; ts: number };
-    const important: Entry[] = [];
-    const packets: Entry[] = [];
-
+    const important: Row[] = [];
     for (const [addr, evts] of nodeEvents) {
-      for (const e of evts) {
-        const ts =
-          "timestamp" in e && typeof e.timestamp === "number"
-            ? e.timestamp
-            : Date.now() / 1000;
-        const entry = { event: e, nodeAddr: addr, ts };
-
-        if (e.kind === "packet_processed") {
-          if (packets.length < 20) packets.push(entry);
-        } else {
-          important.push(entry);
-        }
-      }
+      const nid = findNodeId(addr, nodes);
+      evts.forEach((e, i) => {
+        important.push({
+          key: `${addr}-${e.kind}-${e.timestamp}-${i}`,
+          nodeAddr: addr,
+          ts: typeof e.timestamp === "number" ? e.timestamp : 0,
+          color: EVENT_COLORS[e.kind] ?? "rgba(255,255,255,0.3)",
+          text: formatEventCompact(e),
+          detail: formatEventDetail(e, nid),
+        });
+      });
     }
-
     important.sort((a, b) => b.ts - a.ts);
-    packets.sort((a, b) => b.ts - a.ts);
 
-    const result: Entry[] = [];
-    const maxImportant = Math.min(important.length, 5);
-    for (let i = 0; i < maxImportant; i++) result.push(important[i]);
+    const traffic: Row[] = activity.map((a, i) => {
+      const nid = findNodeId(a.address, nodes);
+      const text = formatActivity(a);
+      return {
+        key: `activity-${a.address}-${a.timestamp}-${i}`,
+        nodeAddr: a.address,
+        ts: a.timestamp,
+        color: a.relayed > 0 ? EVENT_COLORS.activity : "#a78bfa",
+        text,
+        detail: `${nid}: ${plural(a.relayed, "packet", "packets")} relayed, ${plural(a.exits, "exit payload", "exit payloads")} since its previous update`,
+      };
+    });
 
-    const remaining = 10 - result.length;
-    for (let i = 0; i < Math.min(packets.length, remaining); i++) {
-      result.push(packets[i]);
-    }
-
+    const result = important.slice(0, MAX_NODE_EVENTS);
+    result.push(...traffic.slice(0, MAX_ROWS - result.length));
     result.sort((a, b) => b.ts - a.ts);
     return result;
-  }, [nodeEvents]);
+  }, [nodeEvents, activity, nodes]);
+
+  if (narrow) return null;
 
   if (events.length === 0) return null;
 
@@ -143,16 +175,14 @@ export function EventFeed() {
         style={{ display: "flex", flexDirection: "column", gap: 0 }}
       >
         {events.map((item, i) => {
-          const e = item.event;
-          const color = EVENT_COLORS[e.kind] ?? "rgba(255,255,255,0.3)";
+          const color = item.color;
           const nid = findNodeId(item.nodeAddr, nodes);
-          const text = formatEventCompact(e);
-          const detail = formatEventDetail(e, nid);
+          const text = item.text;
 
           return (
             <div
-              key={`${item.nodeAddr}-${e.kind}-${i}`}
-              title={detail}
+              key={item.key}
+              title={item.detail}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -183,6 +213,15 @@ export function EventFeed() {
                 }}
               >
                 {text}
+              </span>
+              <span
+                style={{
+                  fontSize: "11px",
+                  color: "rgba(255,255,255,0.25)",
+                  flexShrink: 0,
+                }}
+              >
+                {nid}
               </span>
             </div>
           );

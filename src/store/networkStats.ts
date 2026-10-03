@@ -125,6 +125,10 @@ export interface NetworkSnapshot {
   registryAddress: string | null;
   /** `.indexer.phase`: "starting", "syncing", "retrying" or "live". */
   indexerPhase: string | null;
+  /** `.indexer.chain_id`: the chain the registry lives on. */
+  chainId: number | null;
+  /** `.indexer.verified`: the node list matched the registry's on-chain member set. */
+  verified: boolean | null;
 }
 
 function readString(value: unknown): string | null {
@@ -162,7 +166,24 @@ export function readNetworkSnapshot(
     genesisMs: parseGenesisMs(data.network_genesis_ms, nowMs),
     registryAddress: readString(data.registry_address) ?? readString(indexer.registry_address),
     indexerPhase: readString(indexer.phase),
+    chainId:
+      typeof indexer.chain_id === "number" && Number.isInteger(indexer.chain_id) && indexer.chain_id > 0
+        ? indexer.chain_id
+        : null,
+    verified: typeof indexer.verified === "boolean" ? indexer.verified : null,
   };
+}
+
+const CHAINS: Record<number, { name: string; testnet: boolean }> = {
+  1: { name: "Ethereum", testnet: false },
+  42161: { name: "Arbitrum One", testnet: false },
+  421614: { name: "Arbitrum Sepolia", testnet: true },
+  11155111: { name: "Sepolia", testnet: true },
+};
+
+/** Display name of the registry's chain; unknown ids are shown by number. */
+export function chainInfo(chainId: number): { name: string; testnet: boolean | null } {
+  return CHAINS[chainId] ?? { name: `Chain ${chainId}`, testnet: null };
 }
 
 /**
@@ -216,16 +237,50 @@ export function isOnlineNode(node: NodeInfo): boolean {
 }
 
 /**
- * Deregistered, or known to belong to a registry other than the one the
- * indexer currently follows. Such nodes are dropped from the map entirely.
+ * Deregistered nodes are dropped from the map entirely. The indexer only
+ * lists members of the registry it follows, so no per-node registry check is
+ * needed; during a registry switch the store holds the old list until the
+ * indexer is live again.
  */
-export function isRetiredNode(node: NodeInfo, registryAddress: string | null): boolean {
-  if (node.status === "deregistered") return true;
-  return (
-    !!registryAddress &&
-    !!node.registry_address &&
-    node.registry_address.toLowerCase() !== registryAddress.toLowerCase()
-  );
+export function isRetiredNode(node: NodeInfo): boolean {
+  return node.status === "deregistered";
+}
+
+/**
+ * Average connected peers per node that reports metrics. Each connection is
+ * seen from both ends, so a network-wide sum would count it twice.
+ */
+export function averagePeers(metrics: Iterable<NodeMetrics>): number | null {
+  let sum = 0;
+  let count = 0;
+  for (const m of metrics) {
+    sum += m.activePeers;
+    count++;
+  }
+  return count === 0 ? null : Math.round(sum / count);
+}
+
+/** Seconds since the node process started, or null when the start time is unknown. */
+export function processUptimeSeconds(nodeStartTime: number, nowMs: number): number | null {
+  if (!Number.isFinite(nodeStartTime) || nodeStartTime <= 0) return null;
+  const startMs = nodeStartTime < 1e11 ? nodeStartTime * 1000 : nodeStartTime;
+  if (startMs > nowMs) return null;
+  return Math.floor((nowMs - startMs) / 1000);
+}
+
+/** Durations as "45s", "12m", "3h 5m" or "12d 4h". */
+export function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h >= 24) {
+    const d = Math.floor(h / 24);
+    const rh = h % 24;
+    return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+  }
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 /** Average reputation over the listed nodes only. */

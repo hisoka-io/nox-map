@@ -9,6 +9,10 @@ import {
   isFrozenNode,
   isOnlineNode,
   isRetiredNode,
+  averagePeers,
+  chainInfo,
+  formatDuration,
+  processUptimeSeconds,
   networkUptime,
   networkUptimeSeconds,
   parseGenesisMs,
@@ -173,6 +177,8 @@ test("readNetworkSnapshot reads the indexer's sync status and totals baseline", 
 
   assert.equal(snapshot.registryAddress, "0xnew");
   assert.equal(snapshot.indexerPhase, "live");
+  assert.equal(snapshot.verified, true);
+  assert.equal(snapshot.chainId, null);
   assert.equal(snapshot.genesisMs, Date.UTC(2026, 3, 7));
   assert.deepEqual(snapshot.totals?.totals, { packetsReceived: 500, exitOps: 4 });
   assert.equal(snapshot.totals?.baseline.get("0xa")?.packetsReceived, 10);
@@ -191,6 +197,8 @@ test("readNetworkSnapshot reads the indexer's sync status and totals baseline", 
     genesisMs: null,
     registryAddress: null,
     indexerPhase: null,
+    chainId: null,
+    verified: null,
   });
   assert.equal(
     readNetworkSnapshot({ indexer: { registry_address: "", phase: "starting" } }, now)
@@ -199,16 +207,31 @@ test("readNetworkSnapshot reads the indexer's sync status and totals baseline", 
   );
 });
 
-test("node classification", () => {
-  const registry = "0xABC";
+test("readNetworkSnapshot reads the chain and verification flag", () => {
+  const now = Date.UTC(2026, 9, 2);
+  const live = readNetworkSnapshot(
+    { indexer: { phase: "live", chain_id: 421614, verified: false } },
+    now,
+  );
+  assert.equal(live.chainId, 421614);
+  assert.equal(live.verified, false);
 
-  assert.equal(isRetiredNode(node("0x1", { status: "deregistered" }), null), true);
-  assert.equal(isRetiredNode(node("0x1", { status: "offline" }), null), false);
-  assert.equal(isRetiredNode(node("0x1", { registry_address: "0xabc" }), registry), false);
-  assert.equal(isRetiredNode(node("0x1", { registry_address: "0xdef" }), registry), true);
-  // Registry filtering only applies when both sides report an address.
-  assert.equal(isRetiredNode(node("0x1", { registry_address: "0xdef" }), null), false);
-  assert.equal(isRetiredNode(node("0x1"), registry), false);
+  for (const chain_id of [0, -1, 1.5, "421614", null]) {
+    assert.equal(readNetworkSnapshot({ indexer: { chain_id } }, now).chainId, null);
+  }
+  assert.equal(readNetworkSnapshot({ indexer: { verified: "yes" } }, now).verified, null);
+});
+
+test("chainInfo names the registry chain and flags testnets", () => {
+  assert.deepEqual(chainInfo(421614), { name: "Arbitrum Sepolia", testnet: true });
+  assert.deepEqual(chainInfo(42161), { name: "Arbitrum One", testnet: false });
+  assert.deepEqual(chainInfo(5000), { name: "Chain 5000", testnet: null });
+});
+
+test("node classification", () => {
+  assert.equal(isRetiredNode(node("0x1", { status: "deregistered" })), true);
+  assert.equal(isRetiredNode(node("0x1", { status: "offline" })), false);
+  assert.equal(isRetiredNode(node("0x1")), false);
 
   assert.equal(isOnlineNode(node("0x1")), true);
   assert.equal(isOnlineNode(node("0x1", { status: undefined })), true);
@@ -238,4 +261,28 @@ test("reputation average covers listed nodes only", () => {
     count: 2,
   });
   assert.deepEqual(averageReputation([], reputation), { average: null, count: 0 });
+});
+
+test("averagePeers counts each node once instead of summing both ends", () => {
+  const withPeers = (activePeers: number) => ({ activePeers }) as NodeMetrics;
+  assert.equal(averagePeers([withPeers(12), withPeers(12), withPeers(9)]), 11);
+  assert.equal(averagePeers([]), null);
+});
+
+test("processUptimeSeconds reads the node start time in seconds or milliseconds", () => {
+  const now = Date.UTC(2026, 9, 2, 12);
+  const start = Date.UTC(2026, 8, 25, 2, 31) / 1000;
+  assert.equal(processUptimeSeconds(start, now), (now / 1000) - start);
+  assert.equal(processUptimeSeconds(start * 1000, now), (now / 1000) - start);
+  assert.equal(processUptimeSeconds(0, now), null);
+  assert.equal(processUptimeSeconds(now / 1000 + 60, now), null);
+});
+
+test("formatDuration switches to days past 24 hours", () => {
+  assert.equal(formatDuration(42), "42s");
+  assert.equal(formatDuration(600), "10m");
+  assert.equal(formatDuration(3_600 + 300), "1h 5m");
+  // Lifetime uptime used to render as "4267h 19m".
+  assert.equal(formatDuration(15_362_370), "177d 19h");
+  assert.equal(formatDuration(86_400 * 3), "3d");
 });
